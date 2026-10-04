@@ -1,0 +1,39 @@
+{
+  "name": "pumpkinpoint",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Story-driven presentations: write slides, add the story behind them, and export animated HTML.",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "sample": "tsx scripts/export-sample.ts"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Saleemhamady/PumpkinPoint.git"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.131.0",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0"
+  },
+  "devDependencies": {
+    "@fontsource/anton": "^5.3.0",
+    "@fontsource/caveat": "^5.3.0",
+    "@fontsource/lora": "^5.3.0",
+    "@fontsource/nunito": "^5.3.0",
+    "@types/node": "^26.6.4",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.1",
+    "esbuild": "^0.28.2",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.2",
+    "vitest": "^5.0.3"
+  }
+}

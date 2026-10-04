@@ -1,0 +1,93 @@
+import { describe, expect, it, vi } from 'vitest';
+import { buildDeck, sceneKey, sceneStates, toRuntimeData } from '../src/shared/compiler.ts';
+import { offlinePlan } from '../src/shared/plan.ts';
+import { sampleDeck } from '../src/shared/sample.ts';
+import type { BuildCache, Deck, ScenePlan } from '../src/shared/types.ts';
+
+const plan = (tag: string): ScenePlan => ({
+  mood: 'calm',
+  setting: 'none',
+  motifs: [{ motif: 'star', role: 'hero', motion: 'none' }],
+  narration: tag,
+  kinetic: [{ text: tag, emphasis: tag, motion: 'rise' }],
+});
+
+async function run(deck: Deck, cache: BuildCache) {
+  const compile = vi.fn(async ({ slide }: { slide: { title: string } }) => plan(slide.title));
+  const result = await buildDeck({ deck, cache, planner: 'offline', compile, fallback: async () => plan('fallback') });
+  return { result, compile };
+}
+
+describe('incremental build', () => {
+  it('compiles every scene the first time and nothing the second time', async () => {
+    const deck = sampleDeck();
+    const first = await run(deck, {});
+    expect(first.compile).toHaveBeenCalledTimes(deck.slides.length);
+    expect(first.result.rebuilt).toBe(deck.slides.length);
+
+    const second = await run(deck, first.result.cache);
+    expect(second.compile).not.toHaveBeenCalled();
+    expect(second.result.reused).toBe(deck.slides.length);
+  });
+
+  it('rebuilds only the scene whose slide or story changed', async () => {
+    const deck = sampleDeck();
+    const { result } = await run(deck, {});
+    const edited: Deck = {
+      ...deck,
+      slides: deck.slides.map((s, i) => (i === 2 ? { ...s, story: 'A brand new story.' } : i === 4 ? { ...s, bullets: [...s.bullets, 'One more'] } : s)),
+    };
+    expect(sceneStates(edited, result.cache, 'offline')).toEqual(['cached', 'cached', 'stale', 'cached', 'stale', 'cached']);
+    const again = await run(edited, result.cache);
+    expect(again.compile).toHaveBeenCalledTimes(2);
+    expect(again.result.reused).toBe(deck.slides.length - 2);
+  });
+
+  it('does not rebuild when the style changes, slides move or whitespace changes', async () => {
+    const deck = sampleDeck();
+    const { result } = await run(deck, {});
+    const moved: Deck = { ...deck, style: 'kinetic', slides: [...deck.slides].reverse().map((s) => ({ ...s, story: ` ${s.story} ` })) };
+    const again = await run(moved, result.cache);
+    expect(again.compile).not.toHaveBeenCalled();
+  });
+
+  it('keys depend on the planner, so turning AI on rebuilds once', () => {
+    const slide = sampleDeck().slides[0];
+    expect(sceneKey(slide, 'ai')).not.toBe(sceneKey(slide, 'offline'));
+  });
+
+  it('uses the fallback for failed scenes without caching them', async () => {
+    const deck = sampleDeck();
+    const compile = vi.fn(async ({ index }: { index: number }) => {
+      if (index === 1) throw new Error('boom');
+      return plan(String(index));
+    });
+    const events: string[] = [];
+    const result = await buildDeck({
+      deck, cache: {}, planner: 'ai', compile, fallback: async () => plan('fallback'),
+      onEvent: (e) => events.push(`${e.type}:${e.index}`),
+    });
+    expect(result.failed).toBe(1);
+    expect(result.plans[1].narration).toBe('fallback');
+    expect(result.cache[sceneKey(deck.slides[1], 'ai')]).toBeUndefined();
+    expect(events).toContain('failed:1');
+  });
+
+  it('compiles identical slides once', async () => {
+    const deck = sampleDeck();
+    const twin: Deck = { ...deck, slides: [deck.slides[0], { ...deck.slides[0], id: 'twin' }] };
+    const { compile, result } = await run(twin, {});
+    expect(compile).toHaveBeenCalledTimes(1);
+    expect(result.plans[0]).toEqual(result.plans[1]);
+  });
+
+  it('produces runtime data in slide order without empty bullets', () => {
+    const deck = sampleDeck();
+    deck.slides[1].bullets.push('  ');
+    const plans = deck.slides.map((s, i) => offlinePlan(s, s.story, i, deck.slides.length));
+    const data = toRuntimeData(deck, plans);
+    expect(data.scenes).toHaveLength(deck.slides.length);
+    expect(data.scenes[1].slide.bullets).toHaveLength(3);
+    expect(data.style).toBe(deck.style);
+  });
+});
