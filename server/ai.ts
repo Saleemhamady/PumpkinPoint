@@ -4,10 +4,11 @@
 
 import Anthropic from '@anthropic-ai/sdk';
 import { MOTIFS, MOTIF_IDS } from '../src/shared/motifs.ts';
-import { offlinePlan, sanitizePlan } from '../src/shared/plan.ts';
+import { slideSummary } from '../src/shared/elements.ts';
+import { offlinePlan, sanitizePlan, type PolishText } from '../src/shared/plan.ts';
 import {
   KINETIC_MOTIONS, LAYOUTS, MOODS, MOTIONS, SETTINGS,
-  type Layout, type ScenePlan, type SlideContent,
+  type Layout, type ScenePlan, type SlideContent, type SlideElement,
 } from '../src/shared/types.ts';
 
 export const DEFAULT_MODEL = 'claude-opus-5-5';
@@ -46,15 +47,9 @@ const LAYOUT_GUIDE = `Slide layouts:
 - statement: one strong sentence as the title, optional attribution as subtitle, no bullets
 - stat: a number as the title (e.g. "42%", "$3M", "10x"), what it measures as the subtitle`;
 
-function describeSlides(slides: SlideContent[]): string {
-  return slides
-    .map((s, i) => {
-      const lines = [`Slide ${i + 1} (${s.layout}): ${s.title || '(untitled)'}`];
-      if (s.subtitle) lines.push(`  subtitle: ${s.subtitle}`);
-      for (const b of s.bullets) if (b.trim()) lines.push(`  - ${b}`);
-      return lines.join('\n');
-    })
-    .join('\n');
+/** Slides as text: one block per slide, one line per text element ("title: ...", "body: ..."). */
+function describeSlides(summaries: string[]): string {
+  return summaries.map((sum, i) => `Slide ${i + 1}:\n${sum.trim() ? sum.replace(/^/gm, '  ') : '  (empty)'}`).join('\n');
 }
 
 function cleanSlide(raw: unknown): SlideContent {
@@ -109,15 +104,25 @@ Open with a title slide. Bullets are phrases, not paragraphs (under 10 words eac
     return { title: typeof raw.title === 'string' ? raw.title.slice(0, 120) : topic.slice(0, 120), slides };
   }
 
-  /** Layer 1: tidy one slide (shorter wording, better layout) without changing its meaning. */
-  async polishSlide(slide: SlideContent, context: SlideContent[]): Promise<SlideContent> {
-    const system = `You are a presentation editor. Improve one slide so it reads well at a glance: tighten wording, split or merge bullets, fix grammar, and pick the layout that suits the content. Keep the author's meaning and facts; never invent numbers or claims. ${LAYOUT_GUIDE}`;
-    const user = `The deck:\n${describeSlides(context)}\n\nImprove this slide:\n${describeSlides([slide])}`;
-    return cleanSlide(await this.json(system, user, SLIDE_SCHEMA, 'medium'));
+  /** Layer 1: tidy the wording of one slide's texts without changing meaning, roles or layout. */
+  async polishSlide(texts: PolishText[], context: string[]): Promise<{ id: string; text: string }[]> {
+    const system = `You are a presentation editor. Improve the wording of one slide so it reads well at a glance: tighten phrasing, fix grammar, keep list items short (one per line). Keep the author's meaning and facts; never invent numbers or claims. Return every text by its id, in the same role.`;
+    const items = texts.map((t) => `- id ${t.id} (${t.role}${t.list ? ', one bullet per line' : ''}):\n${t.text}`).join('\n');
+    const user = `The deck:\n${describeSlides(context)}\n\nImprove the texts of this slide:\n${items}`;
+    const raw = (await this.json(system, user, obj({ texts: arr(obj({ id: str, text: str })) }), 'medium')) as { texts?: unknown };
+    const known = new Set(texts.map((t) => t.id));
+    const out = Array.isArray(raw.texts)
+      ? raw.texts.flatMap((t) => {
+          const r = (t && typeof t === 'object' ? t : {}) as Record<string, unknown>;
+          return typeof r.id === 'string' && known.has(r.id) && typeof r.text === 'string' && r.text.trim() ? [{ id: r.id, text: r.text.trim().slice(0, 1200) }] : [];
+        })
+      : [];
+    if (!out.length) throw new Error('No improved text came back.');
+    return out;
   }
 
   /** Layer 2: find one story that runs underneath the whole deck. */
-  async writeStories(title: string, slides: SlideContent[], existing: string[], only: number | null): Promise<string[]> {
+  async writeStories(title: string, slides: string[], existing: string[], only: number | null): Promise<string[]> {
     const system = `You turn presentations into visual stories for an animation engine. The animation does not show the slide's words; it tells the story behind them with images: a world, characters and objects that change from slide to slide.
 
 Choose ONE visual metaphor for the whole deck (for example a voyage at sea, a seed growing into a forest, a climb to a summit, a rocket leaving the ground) and follow it across the slides as an arc: setup, tension, turning point, resolution. For each slide write one or two short sentences describing what happens in that world while the slide is on screen. Be concrete and visual, present tense, no jargon, and do not repeat the slide's text.
@@ -137,7 +142,7 @@ Settings it can draw: sea, land, city, sky, space.`;
   }
 
   /** Compile one scene: decide what the animation shows while this slide is up. */
-  async compileScene(slide: SlideContent, story: string, index: number, total: number): Promise<ScenePlan> {
+  async compileScene(elements: SlideElement[], story: string, index: number, total: number): Promise<ScenePlan> {
     const system = `You are the motion-graphics director of a presentation engine. For one scene you decide what the animation shows. The same plan is rendered in four styles (origami paper, pop-up book, whiteboard sketch, kinetic typography), so describe the scene, not the technique.
 
 Motifs you can use (pick 1-3, exactly one hero; the hero is the main image of the story beat):
@@ -148,8 +153,8 @@ ${MOTIF_CATALOG}
 - motion: how each motif moves once it has appeared.
 - narration: one short storybook sentence for this beat (under 20 words).
 - kinetic: 2-4 punchy lines (under 7 words each) that retell the story beat for kinetic typography; emphasis is one word taken from its line.`;
-    const user = `Scene ${index + 1} of ${total}.\nThe story during this slide: ${story || '(none written: infer a fitting image from the slide)'}\n\nThe slide:\n${describeSlides([slide])}`;
+    const user = `Scene ${index + 1} of ${total}.\nThe story during this slide: ${story || '(none written: infer a fitting image from the slide)'}\n\nThe slide:\n${slideSummary(elements) || '(no text)'}`;
     const raw = await this.json(system, user, PLAN_SCHEMA, 'low');
-    return sanitizePlan(raw, offlinePlan(slide, story, index, total));
+    return sanitizePlan(raw, offlinePlan(elements, story, index, total));
   }
 }

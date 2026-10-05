@@ -1,19 +1,23 @@
-// 3D folding book: a pop-up storybook. Each scene is a spread: the story pops up on
-// the left page, the slide is printed on the right. Clicking turns the page.
+// 3D folding book: a pop-up storybook. Each slide is printed across a spread and its
+// story pops up out of the empty part of the pages. Clicking turns the page.
 
 import { BOOK_AMBIENT, PAPER, type PaperPalette } from '../../shared/palettes.ts';
-import { SETTING_LAYERS, layoutMotifs, polyPath, type Poly } from '../../shared/motifs.ts';
-import type { RuntimeData, RuntimeScene } from '../../shared/types.ts';
+import { SETTING_LAYERS, polyPath, type Poly } from '../../shared/motifs.ts';
+import { themeFor } from '../../shared/theme.ts';
+import { CANVAS_H, CANVAS_W, type RuntimeData, type RuntimeScene } from '../../shared/types.ts';
 import { EASE, type Timeline } from '../anim.ts';
-import { fitContent, renderContent } from '../content.ts';
 import { h, injectStyle, motifSvg, s } from '../dom.ts';
+import { renderSlide } from '../elements.ts';
 import type { Renderer } from '../player.ts';
+import { storyLayout } from '../story.ts';
 
 const PAGE_W = 650;
 const PAGE_H = 820;
 const TILT = 34;
 const RISE = -(TILT + 24);
-const FRAME = { x: 40, y: 40, w: 570, h: 560 };
+/** The slide canvas printed across the spread. */
+const K = (PAGE_W * 2) / CANVAS_W;
+const SLIDE_TOP = (PAGE_H - CANVAS_H * K) / 2;
 
 const CSS = `
 .pp-book{font-family:'Lora',Georgia,'Times New Roman',serif}
@@ -38,27 +42,15 @@ const CSS = `
 .bk-cover::after{content:'';position:absolute;inset:38px;border:1px solid rgba(233,196,106,.4);border-radius:2px}
 .bk-cover-title{font-weight:700;font-size:58px;line-height:1.1}
 .bk-cover-orn{width:120px;height:2px;background:#E9C46A;margin:30px auto;box-shadow:0 8px 0 -0.5px rgba(233,196,106,.5)}
-.bk-frame{position:absolute;left:${FRAME.x}px;top:${FRAME.y}px;width:${FRAME.w}px;height:${FRAME.h}px;border-radius:4px;overflow:hidden}
-.bk-frame::after{content:'';position:absolute;inset:0;box-shadow:inset 0 0 0 2px rgba(255,255,255,.5),inset 0 0 40px rgba(0,0,0,.08);border-radius:4px}
+.bk-clip{position:absolute;inset:0;overflow:hidden;border-radius:inherit}
+.bk-slide{position:absolute;top:${SLIDE_TOP}px;width:${CANVAS_W}px;height:${CANVAS_H}px;transform:scale(${K});transform-origin:0 0}
+.bk-story{position:absolute;border-radius:14px;overflow:hidden;box-shadow:inset 0 0 0 3px rgba(255,255,255,.55),inset 0 0 50px rgba(0,0,0,.08)}
+.bk-story svg{position:absolute;inset:0}
+.bk-caption{position:absolute;display:flex;align-items:center;justify-content:center;text-align:center;font-family:'Lora',Georgia,serif;font-style:italic;font-size:34px;line-height:1.3;color:#4A3B2C}
 .bk-piece{position:absolute;transform-origin:50% 100%;backface-visibility:hidden;-webkit-backface-visibility:hidden}
 .bk-piece svg{position:absolute;inset:0;overflow:visible;filter:drop-shadow(0 3px 2px rgba(0,0,0,.18))}
 .bk-cast{position:absolute;opacity:0;background:linear-gradient(to top,rgba(50,30,10,.2),rgba(50,30,10,0));border-radius:50% 50% 0 0;filter:blur(5px);pointer-events:none}
 .bk-piece path{stroke:#FFFDF7;stroke-width:3;paint-order:stroke}
-.bk-narr{position:absolute;left:70px;right:70px;top:${FRAME.y + FRAME.h + 28}px;bottom:56px;display:flex;align-items:center;justify-content:center;text-align:center;font-style:italic;font-size:29px;line-height:1.35;color:#4A3B2C}
-.bk-narr::first-letter{font-size:1.6em;color:var(--accent);font-style:normal;font-weight:700}
-.bk-content{position:absolute;left:70px;top:70px;width:${PAGE_W - 140}px;height:${PAGE_H - 170}px;display:flex;flex-direction:column;justify-content:center}
-.bk-content .c-title{font-weight:700;font-size:calc(var(--fs) * 54px);line-height:1.1}
-.bk-content .c-statement{font-style:italic;font-size:calc(var(--fs) * 46px);line-height:1.25}
-.bk-content .c-statement::before{content:'\\201C';display:block;font-size:2.2em;line-height:.6;color:var(--accent)}
-.bk-content .c-stat{white-space:nowrap;font-weight:700;font-size:calc(var(--fs) * 150px);line-height:1;color:var(--accent)}
-.bk-content .c-sub{font-style:italic;font-size:calc(var(--fs) * 28px);line-height:1.35;color:#6A5847;margin-top:calc(var(--fs) * 18px)}
-.bk-content .c-bullets{list-style:none;margin:calc(var(--fs) * 34px) 0 0;padding:0}
-.bk-content .c-bullet{display:flex;gap:18px;align-items:baseline;font-size:calc(var(--fs) * 29px);line-height:1.38;margin:0 0 calc(var(--fs) * 14px)}
-.bk-content .c-mark{flex:none;width:10px;height:10px;background:var(--accent);transform:rotate(45deg) translateY(-3px)}
-.bk-content .l-title{text-align:center}
-.bk-content .l-title .c-title{font-size:calc(var(--fs) * 66px)}
-.bk-orn{position:absolute;left:50%;top:48px;width:90px;height:2px;margin-left:-45px;background:var(--accent);opacity:.7}
-.bk-folio{position:absolute;left:0;right:0;bottom:36px;text-align:center;font-size:20px;color:#9A8770;font-style:italic}
 `;
 
 interface Piece {
@@ -68,7 +60,8 @@ interface Piece {
 }
 
 interface StoryPage {
-  face: HTMLElement;
+  /** The two pages of the spread (left: back of leaf i, right: front of leaf i+1). */
+  faces: HTMLElement[];
   pieces: Piece[];
   /** Pages are flat (cheap, and safe for 3D sorting) unless their pop-ups are up. */
   up: boolean;
@@ -78,7 +71,7 @@ export class BookRenderer implements Renderer {
   private data!: RuntimeData;
   private ambHost!: HTMLElement;
   private leaves: HTMLElement[] = [];
-  /** The pop-up page of each scene (the back of leaf k is scene k's story). */
+  /** The spread of each scene. */
   private pages: StoryPage[] = [];
   private flipped: boolean[] = [];
 
@@ -93,22 +86,28 @@ export class BookRenderer implements Renderer {
     h('div', 'bk-block', book);
 
     const n = data.scenes.length;
-    // Leaf 0 is the cover; leaf k (1..n) carries slide k-1 on its front and scene k's
-    // pop-up page on its back.
+    // Leaf 0 is the cover. Scene i is printed on the back of leaf i (left page) and
+    // the front of leaf i+1 (right page).
+    const fronts: HTMLElement[] = [];
+    const backs: HTMLElement[] = [];
     for (let k = 0; k <= n; k++) {
       const leaf = h('div', 'bk-leaf', book);
-      const front = h('div', 'bk-face front', leaf);
-      const back = h('div', 'bk-face back', leaf);
-      if (k === 0) this.buildCover(front);
-      else this.buildContentPage(front, data.scenes[k - 1], k);
-      this.pages[k] = { face: back, pieces: k < n ? this.buildStoryPage(back, data.scenes[k]) : [], up: false };
-      h('div', 'bk-gutter', back);
-      h('div', 'bk-shade', front);
-      h('div', 'bk-shade', back);
+      fronts.push(h('div', 'bk-face front', leaf));
+      backs.push(h('div', 'bk-face back', leaf));
       this.leaves.push(leaf);
       this.flipped.push(false);
       this.setLeaf(k, false);
     }
+    this.buildCover(fronts[0]);
+    data.scenes.forEach((scene, i) => {
+      const faces = [backs[i], fronts[i + 1]];
+      this.pages[i] = { faces, pieces: this.buildSpread(faces, scene), up: false };
+    });
+    for (const face of [...fronts.slice(1), ...backs]) {
+      h('div', 'bk-gutter', face);
+      h('div', 'bk-shade', face);
+    }
+    h('div', 'bk-shade', fronts[0]);
   }
 
   frameColor(index: number): string {
@@ -149,65 +148,98 @@ export class BookRenderer implements Renderer {
     h('div', 'bk-cover-orn', face);
   }
 
-  private buildContentPage(face: HTMLElement, scene: RuntimeScene, folio: number): void {
+  /** Print the slide across both pages and build the pop-ups for its empty part. */
+  private buildSpread(faces: HTMLElement[], scene: RuntimeScene): Piece[] {
     const pal = PAPER[scene.plan.mood];
-    face.style.setProperty('--accent', accentFor(pal));
-    h('div', 'bk-orn', face);
-    const box = h('div', 'bk-content', face);
-    const parts = renderContent(scene.slide, box);
-    fitContent(parts.root, PAGE_W - 140, PAGE_H - 170);
-    h('div', 'bk-folio', face, `— ${folio} —`);
-    h('div', 'bk-gutter', face);
-  }
-
-  private buildStoryPage(face: HTMLElement, scene: RuntimeScene): Piece[] {
-    const pal = PAPER[scene.plan.mood];
-    face.style.setProperty('--accent', accentFor(pal));
-    const frame = h('div', 'bk-frame', face);
-    frame.style.background = `linear-gradient(to bottom, ${pal.bg2} 0%, ${pal.bg} 70%)`;
-    const pieces: Piece[] = [];
-    const bottom = FRAME.y + FRAME.h;
-
-    const addPiece = (left: number, base: number, w: number, ht: number, content: Element, castShadow = true) => {
-      const shadow = h('div', 'bk-cast', face);
-      if (castShadow) Object.assign(shadow.style, { left: `${left}px`, top: `${base - ht * 0.3}px`, width: `${w}px`, height: `${ht * 0.3}px` });
-      const el = h('div', 'bk-piece', face);
-      Object.assign(el.style, { left: `${left}px`, top: `${base - ht}px`, width: `${w}px`, height: `${ht}px` });
-      el.appendChild(content);
-      pieces.push({ el, shadow });
-    };
-
-    // Ground strips (waves, hills, skylines) become pop-up layers; anything floating
-    // (clouds, stars) is printed on the backdrop.
-    const layers = SETTING_LAYERS[scene.plan.setting];
-    const strips = layers.filter((l) => l.polys.every((p) => p.f === false || touchesBottom(p)));
-    const printed = layers.filter((l) => !strips.includes(l));
-    if (printed.length) {
-      const svg = s('svg', { width: FRAME.w, height: FRAME.h, viewBox: `0 0 ${FRAME.w} ${FRAME.h}` }, frame);
-      svg.style.position = 'absolute';
-      for (const l of printed) for (const p of l.polys) if (p.f !== false) s('path', { d: polyPath(scale(p, FRAME.w / 200, FRAME.h / 100), 0, 0, 100), fill: pal.tones[p.t] }, svg);
-    }
-    const stripBase = (i: number) => bottom - (strips.length - 1 - i) * 30;
-    strips.forEach((layer, i) => {
-      // Squash the strip so it only hides the feet of the figures behind it.
-      const polys = layer.polys.filter((p) => p.f !== false).map((p) => squash(scale(p, FRAME.w / 200, FRAME.h / 100), FRAME.h, 0.55));
-      const bb = bbox(polys);
-      const ht = bb.y1 - bb.y0;
-      const svg = s('svg', { width: FRAME.w, height: ht, viewBox: `0 ${bb.y0} ${FRAME.w} ${ht}` }, null);
-      for (const p of polys) s('path', { d: polyPath(p, 0, 0, 100), fill: pal.tones[p.t] }, svg);
-      addPiece(FRAME.x, stripBase(i), FRAME.w, ht, svg);
+    const theme = themeFor('book', scene.plan.mood);
+    const story = storyLayout(scene.elements, scene.plan, { caption: true, captionAt: 'top' });
+    const slides = faces.map((face, side) => {
+      face.style.setProperty('--accent', accentFor(pal));
+      const clip = h('div', 'bk-clip', face);
+      const slide = h('div', 'bk-slide', clip);
+      slide.style.left = `${-side * PAGE_W}px`;
+      return slide;
     });
 
-    // The motifs as cut-out figures. Ground figures stand just behind the front strip.
-    const placed = layoutMotifs(scene.plan.motifs, FRAME.w, FRAME.h, scene.plan.setting);
-    for (const m of placed) {
-      const groundBase = strips.length ? bottom - 16 : bottom - 6;
-      const base = m.def.place === 'ground' ? groundBase : FRAME.y + m.y + m.size;
-      addPiece(FRAME.x + m.x, base, m.size, m.size, motifSvg(m.def, pal.tones, m.size), m.def.place === 'ground');
+    // Printed: the story window, floating scenery, the caption, then the slide itself.
+    const r = story.region;
+    const layers = SETTING_LAYERS[scene.plan.setting];
+    const strips = story.ghost ? [] : layers.filter((l) => l.polys.every((p) => p.f === false || touchesBottom(p)));
+    const printed = story.ghost ? [] : layers.filter((l) => !strips.includes(l));
+    for (const slide of slides) {
+      if (!story.ghost) {
+        const win = h('div', 'bk-story', slide);
+        Object.assign(win.style, { left: `${r.x}px`, top: `${r.y}px`, width: `${r.w}px`, height: `${r.h}px`, background: `linear-gradient(to bottom, ${pal.bg2} 0%, ${pal.bg} 75%)` });
+        if (printed.length) {
+          const svg = s('svg', { width: r.w, height: r.h, viewBox: `0 0 ${r.w} ${r.h}` }, win);
+          for (const l of printed) for (const p of l.polys) if (p.f !== false) s('path', { d: polyPath(scale(p, r.w / 200, r.h / 100), 0, 0, 100), fill: pal.tones[p.t] }, svg);
+        }
+      } else {
+        // No room on this slide: the story is printed faintly behind it instead.
+        for (const m of story.placed) {
+          const svg = motifSvg(m.def, pal.tones, m.size);
+          Object.assign(svg.style, { position: 'absolute', left: `${m.x}px`, top: `${m.y}px`, opacity: '0.22' });
+          slide.appendChild(svg);
+        }
+      }
+      if (story.caption && scene.plan.narration) {
+        const c = story.caption;
+        const cap = h('div', 'bk-caption', slide, scene.plan.narration);
+        Object.assign(cap.style, { left: `${c.x}px`, top: `${c.y}px`, width: `${c.w}px`, height: `${c.h}px` });
+      }
+      renderSlide(scene.elements, theme, slide);
     }
+    if (story.ghost) return [];
 
-    if (scene.plan.narration) h('div', 'bk-narr', face, scene.plan.narration);
-    for (const p of pieces) p.el.style.transform = 'translateZ(1px) rotateX(0deg)';
+    // Pop-ups, placed in canvas units and converted to the page they stand on.
+    const pieces: Piece[] = [];
+    const addPiece = (x: number, base: number, w: number, ht: number, content: (vx: number, vw: number) => Element, castShadow: boolean, clip = false) => {
+      // A piece crossing the spine is split in two, one half on each page.
+      const spine = CANVAS_W / 2;
+      const parts = x < spine && x + w > spine ? [[x, spine], [spine, x + w]] : [[x, x + w]];
+      for (const [a, b] of parts) {
+        const side = (a + b) / 2 < spine ? 0 : 1;
+        const face = faces[side];
+        const left = a * K - side * PAGE_W;
+        const top = SLIDE_TOP + (base - ht) * K;
+        const shadow = h('div', 'bk-cast', face);
+        if (castShadow) Object.assign(shadow.style, { left: `${left}px`, top: `${SLIDE_TOP + (base - ht * 0.3) * K}px`, width: `${(b - a) * K}px`, height: `${ht * 0.3 * K}px` });
+        const el = h('div', 'bk-piece', face);
+        Object.assign(el.style, { left: `${left}px`, top: `${top}px`, width: `${(b - a) * K}px`, height: `${ht * K}px`, transform: 'translateZ(1px) rotateX(0deg)' });
+        const c = content(a - x, b - a);
+        // Clip to the half that belongs on this page.
+        if (parts.length > 1 || clip) (c as SVGSVGElement).style.overflow = 'hidden';
+        c.setAttribute('width', String((b - a) * K));
+        c.setAttribute('height', String(ht * K));
+        el.appendChild(c);
+        pieces.push({ el, shadow });
+      }
+    };
+
+    // Ground strips (waves, hills, skylines) stand along the bottom of the story window.
+    const bottom = r.y + r.h;
+    strips.forEach((layer, i) => {
+      const polys = layer.polys.filter((p) => p.f !== false).map((p) => squash(scale(p, r.w / 200, r.h / 100), r.h, 0.55));
+      const bb = bbox(polys);
+      const ht = bb.y1 - bb.y0;
+      addPiece(r.x, bottom - (strips.length - 1 - i) * 34, r.w, ht, (vx, vw) => {
+        const svg = s('svg', { viewBox: `${vx} ${bb.y0} ${vw} ${ht}`, preserveAspectRatio: 'none' }, null);
+        for (const p of polys) s('path', { d: polyPath(p, 0, 0, 100), fill: pal.tones[p.t] }, svg);
+        return svg;
+      }, true, true);
+    });
+
+    // The motifs as cut-out figures; ground figures stand just behind the front strip.
+    for (const m of story.placed) {
+      const ground = m.def.place === 'ground';
+      const base = ground ? bottom - (strips.length ? 20 : 8) : m.y + m.size;
+      addPiece(m.x, base, m.size, m.size, (vx, vw) => {
+        const svg = motifSvg(m.def, pal.tones, m.size);
+        svg.setAttribute('viewBox', `${vx} 0 ${vw} ${m.size}`);
+        svg.setAttribute('preserveAspectRatio', 'none');
+        return svg;
+      }, ground);
+    }
     return pieces;
   }
 
@@ -242,7 +274,7 @@ export class BookRenderer implements Renderer {
     const page = this.pages[index];
     if (!page) return;
     page.up = true;
-    page.face.style.transformStyle = 'preserve-3d';
+    for (const face of page.faces) face.style.transformStyle = 'preserve-3d';
     page.pieces.forEach((p, i) => {
       tl.animate(p.el, [
         { transform: 'translateZ(1px) rotateX(0deg)' },
@@ -266,7 +298,7 @@ export class BookRenderer implements Renderer {
       tl.animate(p.shadow, [{ opacity: 1 }, { opacity: 0 }], { duration: 250, delay, fill: 'forwards' });
     });
     const flatten = () => {
-      if (!page.up) page.face.style.transformStyle = '';
+      if (!page.up) for (const face of page.faces) face.style.transformStyle = '';
     };
     if (last) (last as Animation).finished.then(flatten, flatten);
     else flatten();

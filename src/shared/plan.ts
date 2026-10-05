@@ -1,11 +1,12 @@
 // Scene plans: validation of AI output, plus an offline planner and story writer that
 // work without an API key (keyword matching against the motif library).
 
+import { slidePlainText, slideTitle } from './elements.ts';
 import { MOTIFS, MOTIF_IDS, getMotif } from './motifs.ts';
 import {
   KINETIC_MOTIONS, MOODS, MOTIONS, SETTINGS,
   type KineticLine, type KineticMotion, type Mood, type Motion, type PlanMotif,
-  type ScenePlan, type Setting, type SlideContent,
+  type ScenePlan, type Setting, type SlideElement, type TextRole,
 } from './types.ts';
 
 // ---- text helpers ----------------------------------------------------------------
@@ -28,9 +29,6 @@ function firstIndex(tokenList: string[], kw: string): number {
   return i < 0 ? Infinity : i;
 }
 
-export function slideText(s: SlideContent): string {
-  return [s.title, s.subtitle, ...s.bullets].join(' ');
-}
 
 function clip(text: string, max: number): string {
   const t = text.replace(/\s+/g, ' ').trim();
@@ -194,8 +192,9 @@ export function kineticLines(story: string, fallbackText: string, motifWords: st
   });
 }
 
-export function offlinePlan(slide: SlideContent, story: string, index: number, total: number): ScenePlan {
-  const sText = slideText(slide);
+export function offlinePlan(elements: SlideElement[], story: string, index: number, total: number): ScenePlan {
+  const sText = slidePlainText(elements);
+  const title = slideTitle(elements);
   const scored = scoreMotifs(story, sText);
   const arc = index === 0 ? 'start' : index === total - 1 && total > 1 ? 'end' : 'middle';
   // The hero is the best match; supports must come from the story or repeat in the slide.
@@ -204,13 +203,13 @@ export function offlinePlan(slide: SlideContent, story: string, index: number, t
   const chosen = ids.slice(0, 3);
   const motifs: PlanMotif[] = chosen.map((id, i) => ({ motif: id, role: i === 0 ? 'hero' : 'support', motion: getMotif(id)!.motion }));
   const motifWords = chosen.flatMap((id) => getMotif(id)!.keywords);
-  const narration = clip(sentences(story)[0] ?? (slide.subtitle || slide.title), 200);
+  const narration = clip(sentences(story)[0] ?? title, 200);
   return {
     mood: detectMood(story, sText, index, total),
     setting: detectSetting(story, sText, chosen[0]),
     motifs,
     narration,
-    kinetic: kineticLines(story, slide.title, motifWords),
+    kinetic: kineticLines(story, title, motifWords),
   };
 }
 
@@ -226,9 +225,9 @@ const INTENT_WORDS: [Intent, string[]][] = [
   ['future', ['next', 'future', 'roadmap', 'ask', 'plan', 'vision', 'goal', 'goals', 'thank', 'thanks', 'join', 'invest', 'contact', 'summary', 'conclusion']],
 ];
 
-function detectIntent(slide: SlideContent, index: number, total: number): Intent {
+function detectIntent(slideWords: string, index: number, total: number): Intent {
   if (index === 0) return 'opening';
-  const text = slideText(slide).toLowerCase();
+  const text = slideWords.toLowerCase();
   const tk = tokens(text);
   let best: Intent = 'other';
   let bestScore = 0;
@@ -271,8 +270,9 @@ const METAPHORS: Record<'voyage' | 'garden' | 'climb', Record<Intent, string>> =
 };
 
 /** Write one story line per slide using a single metaphor for the whole deck. */
-export function offlineStories(slides: SlideContent[]): string[] {
-  const all = slides.map(slideText).join(' ').toLowerCase();
+export function offlineStories(slides: SlideElement[][]): string[] {
+  const words = slides.map(slidePlainText);
+  const all = words.join(' ').toLowerCase();
   const tk = tokens(all);
   const count = (words: string[]) => words.reduce((n, w) => n + matchesKeyword(tk, all, w), 0);
   const scores = {
@@ -282,18 +282,26 @@ export function offlineStories(slides: SlideContent[]): string[] {
   };
   const metaphor = (Object.entries(scores) as [keyof typeof METAPHORS, number][]).sort((a, b) => b[1] - a[1])[0];
   const set = METAPHORS[metaphor[1] > 0 ? metaphor[0] : 'voyage'];
-  return slides.map((s, i) => set[detectIntent(s, i, slides.length)]);
+  return words.map((w, i) => set[detectIntent(w, i, slides.length)]);
 }
 
-/** Light tidy-up of slide text, used when no AI is available. */
-export function offlinePolish(slide: SlideContent): SlideContent {
+export interface PolishText {
+  id: string;
+  role: TextRole;
+  text: string;
+  list: boolean;
+}
+
+/** Light tidy-up of a slide's texts, used when no AI is available. */
+export function offlinePolish(texts: PolishText[]): { id: string; text: string }[] {
   const tidy = (t: string) => {
-    const s = t.replace(/\s+/g, ' ').replace(/^[-*•·\s]+/, '').trim();
+    const s = t.replace(/[ \t]+/g, ' ').replace(/^[-*•·\s]+/, '').trim();
     return s ? s[0].toUpperCase() + s.slice(1) : s;
   };
-  const bullets = slide.bullets.map(tidy).filter(Boolean).map((b) => b.replace(/[.;,]+$/, ''));
-  let layout = slide.layout;
-  if (!bullets.length && layout === 'bullets') layout = slide.subtitle ? 'title' : 'statement';
-  if (/^[^\s]{0,3}[\d.,]+\s*[%xkKmMbB+]?$/.test(slide.title.trim()) && !bullets.length) layout = 'stat';
-  return { layout, title: tidy(slide.title), subtitle: tidy(slide.subtitle), bullets: bullets.slice(0, 6) };
+  return texts.map((t) => ({
+    id: t.id,
+    text: t.list
+      ? t.text.split('\n').map(tidy).filter(Boolean).map((l) => l.replace(/[.;,]+$/, '')).join('\n')
+      : t.text.split('\n').map(tidy).filter(Boolean).join('\n'),
+  }));
 }

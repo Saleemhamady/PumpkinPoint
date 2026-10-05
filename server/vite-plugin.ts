@@ -4,7 +4,7 @@
 import path from 'node:path';
 import type { Plugin } from 'vite';
 import { createApiHandler } from './api.ts';
-import { allFontCss, bundleRuntime } from './bundle.ts';
+import { bundleRuntime, familyFontCss } from './bundle.ts';
 
 const RUNTIME_ID = 'virtual:pumpkin-runtime';
 const FONTS_ID = 'virtual:pumpkin-fonts';
@@ -28,8 +28,7 @@ export function pumpkinPoint(env: Record<string, string>): Plugin {
         return `export default ${JSON.stringify(code)};`;
       }
       if (id === '\0' + FONTS_ID) {
-        const fonts = allFontCss(root);
-        return `export const styleFonts = ${JSON.stringify(fonts.styles)};\nexport const slideFonts = ${JSON.stringify(fonts.slides)};`;
+        return `export const familyFonts = ${JSON.stringify(familyFontCss(root))};`;
       }
       return null;
     },

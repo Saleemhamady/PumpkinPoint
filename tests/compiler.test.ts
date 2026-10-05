@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { buildDeck, sceneKey, sceneStates, toRuntimeData } from '../src/shared/compiler.ts';
 import { offlinePlan } from '../src/shared/plan.ts';
 import { sampleDeck } from '../src/shared/sample.ts';
-import type { BuildCache, Deck, ScenePlan } from '../src/shared/types.ts';
+import type { BuildCache, Deck, ScenePlan, Slide, TextElement } from '../src/shared/types.ts';
 
 const plan = (tag: string): ScenePlan => ({
   mood: 'calm',
@@ -12,8 +12,10 @@ const plan = (tag: string): ScenePlan => ({
   kinetic: [{ text: tag, emphasis: tag, motion: 'rise' }],
 });
 
+const titleOf = (slide: Slide) => (slide.elements.find((e) => e.type === 'text') as TextElement | undefined)?.text ?? '';
+
 async function run(deck: Deck, cache: BuildCache) {
-  const compile = vi.fn(async ({ slide }: { slide: { title: string } }) => plan(slide.title));
+  const compile = vi.fn(async ({ slide }: { slide: Slide }) => plan(titleOf(slide)));
   const result = await buildDeck({ deck, cache, planner: 'offline', compile, fallback: async () => plan('fallback') });
   return { result, compile };
 }
@@ -30,17 +32,38 @@ describe('incremental build', () => {
     expect(second.result.reused).toBe(deck.slides.length);
   });
 
-  it('rebuilds only the scene whose slide or story changed', async () => {
+  it('rebuilds only the scene whose words or story changed', async () => {
     const deck = sampleDeck();
     const { result } = await run(deck, {});
     const edited: Deck = {
       ...deck,
-      slides: deck.slides.map((s, i) => (i === 2 ? { ...s, story: 'A brand new story.' } : i === 4 ? { ...s, bullets: [...s.bullets, 'One more'] } : s)),
+      slides: deck.slides.map((s, i) =>
+        i === 2 ? { ...s, story: 'A brand new story.' }
+        : i === 4 ? { ...s, elements: s.elements.map((e) => (e.type === 'text' && e.list ? { ...e, text: e.text + '\nOne more' } : e)) }
+        : s,
+      ),
     };
     expect(sceneStates(edited, result.cache, 'offline')).toEqual(['cached', 'cached', 'stale', 'cached', 'stale', 'cached']);
     const again = await run(edited, result.cache);
     expect(again.compile).toHaveBeenCalledTimes(2);
     expect(again.result.reused).toBe(deck.slides.length - 2);
+  });
+
+  it('does not rebuild when elements move, resize, restyle or get decorations', async () => {
+    const deck = sampleDeck();
+    const { result } = await run(deck, {});
+    const restyled: Deck = {
+      ...deck,
+      slides: deck.slides.map((s) => ({
+        ...s,
+        elements: [
+          ...s.elements.map((e) => ({ ...e, x: e.x + 50, y: e.y - 20, w: e.w * 0.8, rotation: 5, ...(e.type === 'text' ? { color: '#ff0000', size: 12, bold: !e.bold } : {}) })),
+          { id: 'deco', type: 'shape' as const, shape: 'star' as const, x: 10, y: 10, w: 50, h: 50, rotation: 0, fill: 'accent', stroke: 'none', strokeWidth: 0 },
+        ],
+      })),
+    };
+    const again = await run(restyled, result.cache);
+    expect(again.compile).not.toHaveBeenCalled();
   });
 
   it('does not rebuild when the style changes, slides move or whitespace changes', async () => {
@@ -81,13 +104,12 @@ describe('incremental build', () => {
     expect(result.plans[0]).toEqual(result.plans[1]);
   });
 
-  it('produces runtime data in slide order without empty bullets', () => {
+  it('produces runtime data with every slide\'s elements in order', () => {
     const deck = sampleDeck();
-    deck.slides[1].bullets.push('  ');
-    const plans = deck.slides.map((s, i) => offlinePlan(s, s.story, i, deck.slides.length));
+    const plans = deck.slides.map((s, i) => offlinePlan(s.elements, s.story, i, deck.slides.length));
     const data = toRuntimeData(deck, plans);
     expect(data.scenes).toHaveLength(deck.slides.length);
-    expect(data.scenes[1].slide.bullets).toHaveLength(3);
+    expect(data.scenes[2].elements).toBe(deck.slides[2].elements);
     expect(data.style).toBe(deck.style);
   });
 });

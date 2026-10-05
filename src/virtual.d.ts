@@ -4,6 +4,6 @@ declare module 'virtual:pumpkin-runtime' {
 }
 
 declare module 'virtual:pumpkin-fonts' {
-  export const styleFonts: Record<import('./shared/types').StyleId, string>;
-  export const slideFonts: string;
+  /** @font-face rules with embedded files, per font family. */
+  export const familyFonts: Record<import('./shared/types.ts').FontKey, string>;
 }

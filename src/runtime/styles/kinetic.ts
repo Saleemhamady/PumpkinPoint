@@ -1,11 +1,14 @@
 // Kinetic typography: the story is told in big animated words over bold colour
 // fields; colour wipes carry the mood from scene to scene, then the slide lands.
 
+import { slideTitle } from '../../shared/elements.ts';
 import { KINETIC } from '../../shared/palettes.ts';
+import { themeFor } from '../../shared/theme.ts';
 import type { KineticLine, RuntimeData, RuntimeScene } from '../../shared/types.ts';
 import { EASE, easeOut, type Timeline } from '../anim.ts';
-import { fitContent, formatStat, parseStat, renderContent, splitWords } from '../content.ts';
+import { formatStat, parseStat, splitWords } from '../content.ts';
 import { h, injectStyle } from '../dom.ts';
+import { readingOrder, renderSlide } from '../elements.ts';
 import type { Renderer } from '../player.ts';
 
 const CSS = `
@@ -20,21 +23,8 @@ const CSS = `
 .k-line .w{display:inline-block;will-change:transform}
 .k-line .em{color:var(--accent);position:relative}
 .k-hl{position:absolute;left:0;right:0;bottom:-.04em;height:.09em;background:var(--accent);transform-origin:0 50%}
-.k-content{position:absolute;left:120px;top:150px;width:1360px;height:660px;display:flex;flex-direction:column;justify-content:center}
-.k-content .c-root{width:100%}
-.k-content .c-title{font-size:calc(var(--fs) * 104px);line-height:.98;text-transform:uppercase}
-.k-content .c-sub{font:800 calc(var(--fs) * 34px)/1.25 'Nunito',system-ui,sans-serif;color:var(--accent);margin-top:18px}
-.k-content .c-bullets{list-style:none;margin:calc(var(--fs) * 40px) 0 0;padding:0}
-.k-content .c-bullet{display:flex;align-items:baseline;gap:22px;font:700 calc(var(--fs) * 40px)/1.25 'Nunito',system-ui,sans-serif;margin:0 0 calc(var(--fs) * 20px)}
-.k-content .c-mark{flex:none;width:18px;height:18px;background:var(--accent);transform:translateY(-4px)}
-.k-content .c-title .w{display:inline-block}
-.k-content .l-title,.k-content .l-statement,.k-content .l-stat{text-align:center}
-.k-content .l-title .c-title{font-size:calc(var(--fs) * 170px);line-height:.95}
-.k-content .l-title .c-sub{font-size:calc(var(--fs) * 42px);margin-top:28px}
-.k-content .c-statement{font-size:calc(var(--fs) * 112px);line-height:1;text-transform:uppercase}
-.k-content .c-stat{white-space:nowrap;font-size:calc(var(--fs) * 300px);line-height:.95;color:var(--accent)}
-.k-content .l-stat .c-sub{font-size:calc(var(--fs) * 52px);color:var(--ink)}
-.k-content .l-stat .c-bullets,.k-content .l-statement .c-bullets,.k-content .l-title .c-bullets{display:inline-block;text-align:left}
+.k-content{position:absolute;inset:0}
+.k-content .pp-words .w{display:inline-block}
 `;
 
 const LINE_STEP = 1150;
@@ -101,7 +91,7 @@ export class KineticRenderer implements Renderer {
 
     this.decorate(root, index, tl, t0);
 
-    const lines = scene.plan.kinetic.length ? scene.plan.kinetic : [{ text: scene.slide.title, emphasis: '', motion: 'rise' as const }];
+    const lines = scene.plan.kinetic.length ? scene.plan.kinetic : [{ text: slideTitle(scene.elements) || ' ', emphasis: '', motion: 'rise' as const }];
     const ghostWord = (lines[lines.length - 1].emphasis || lines[0].text.split(' ')[0] || '').toUpperCase();
     if (ghostWord) {
       const ghost = h('div', 'k-ghost', root, ghostWord);
@@ -111,9 +101,9 @@ export class KineticRenderer implements Renderer {
       tl.loop(ghost, [{ translate: '0 0' }, { translate: '-60px 0' }, { translate: '0 0' }], { duration: 16000, delay: t0 + 2600, easing: 'ease-in-out' });
     }
 
-    lines.forEach((line, k) => this.playLine(root, line, tl, t0 + k * LINE_STEP, k === lines.length - 1));
+    lines.forEach((line, k) => this.playLine(root, line, tl, t0 + k * LINE_STEP));
 
-    const contentStart = t0 + (lines.length - 1) * LINE_STEP + 1000;
+    const contentStart = t0 + lines.length * LINE_STEP - 100;
     this.playContent(root, scene, tl, contentStart);
     return root;
   }
@@ -142,7 +132,7 @@ export class KineticRenderer implements Renderer {
     }
   }
 
-  private playLine(root: HTMLElement, line: KineticLine, tl: Timeline, start: number, isLast: boolean): void {
+  private playLine(root: HTMLElement, line: KineticLine, tl: Timeline, start: number): void {
     const el = h('div', 'k-line', root);
     const inner = h('span', 'k-line-inner', el, line.text);
     // Fit long lines to the stage width.
@@ -164,64 +154,54 @@ export class KineticRenderer implements Renderer {
       tl.animate(w, enter.frames, { duration: enter.duration, delay: start + i * 65, easing: enter.easing });
     });
 
-    if (!isLast) {
-      words.forEach((w, i) => {
-        tl.animate(w, [{ transform: 'translateY(0)', opacity: 1 }, { transform: 'translateY(-70px)', opacity: 0 }], {
-          duration: 240, delay: start + 850 + i * 25, easing: EASE.in, fill: 'forwards',
-        });
+    words.forEach((w, i) => {
+      tl.animate(w, [{ transform: 'translateY(0)', opacity: 1 }, { transform: 'translateY(-70px)', opacity: 0 }], {
+        duration: 240, delay: start + 850 + i * 25, easing: EASE.in, fill: 'forwards',
       });
-      return;
-    }
-
-    // The last line shrinks into a kicker above the slide content.
-    const fontPx = parseFloat(getComputedStyle(inner).fontSize);
-    const k = Math.min(0.45, 34 / fontPx);
-    const dx = 120 - inner.offsetLeft;
-    const dy = 78 - (330 + inner.offsetTop);
-    tl.animate(inner, [{ transform: 'translate(0,0) scale(1)' }, { transform: `translate(${dx}px, ${dy}px) scale(${k})` }], {
-      duration: 600, delay: start + 880, easing: EASE.inOut, fill: 'forwards',
     });
   }
 
+  /** The slide's own elements land where the author placed them, in reading order. */
   private playContent(root: HTMLElement, scene: RuntimeScene, tl: Timeline, start: number): void {
-    const box = h('div', 'k-content', root);
-    const parts = renderContent(scene.slide, box);
-    fitContent(parts.root, 1360, 660);
-
-    if (scene.slide.layout === 'stat') {
-      const stat = parseStat(scene.slide.title);
-      tl.animate(parts.title, [{ transform: 'scale(.4)', opacity: 0 }, { transform: 'scale(1)', opacity: 1 }], {
-        duration: 700, delay: start, easing: EASE.back,
-      });
-      if (stat) {
-        const grouped = /\d,\d/.test(scene.slide.title);
-        parts.title.textContent = formatStat(stat, 0, grouped);
-        tl.tween(1400, start, (t) => (parts.title.textContent = formatStat(stat, stat.value * t, grouped)), easeOut);
+    const layer = h('div', 'k-content', root);
+    const theme = themeFor('kinetic', scene.plan.mood);
+    const nodes = renderSlide(scene.elements, theme, layer);
+    const items = readingOrder(scene.elements.map((el, i) => ({ el, node: nodes[i] })));
+    items.forEach(({ el, node }, i) => {
+      const at = start + i * 170;
+      if (el.type === 'image') {
+        tl.animate(node, [{ clipPath: 'inset(0 100% 0 0)', transform: 'scale(1.08)' }, { clipPath: 'inset(0 0 0 0)', transform: 'none' }], { duration: 760, delay: at, easing: EASE.inOut });
+        return;
       }
-    } else {
-      const words = splitWords(parts.title);
-      words.forEach((w, i) => {
-        tl.animate(w, [{ transform: 'translateY(60px) rotate(4deg)', opacity: 0 }, { transform: 'none', opacity: 1 }], {
-          duration: 620, delay: start + i * 70, easing: EASE.out,
+      if (el.type === 'shape') {
+        const frames = el.shape === 'line'
+          ? [{ transform: 'scaleX(0)' }, { transform: 'none' }]
+          : [{ transform: 'scale(0) rotate(-25deg)' }, { transform: 'none' }];
+        tl.animate(node, frames, { duration: 620, delay: at, easing: EASE.back });
+        return;
+      }
+      if (el.role === 'stat') {
+        const target = node.querySelector<HTMLElement>('.pp-words')!;
+        tl.animate(node, [{ transform: 'scale(.4)', opacity: 0 }, { transform: 'none', opacity: 1 }], { duration: 700, delay: at, easing: EASE.back });
+        const stat = parseStat(el.text);
+        if (stat) {
+          const grouped = /\d,\d/.test(el.text);
+          target.textContent = formatStat(stat, 0, grouped);
+          tl.tween(1400, at, (t) => (target.textContent = formatStat(stat, stat.value * t, grouped)), easeOut);
+        }
+        return;
+      }
+      if (el.list) {
+        node.querySelectorAll('li').forEach((li, k) => {
+          tl.animate(li, [{ transform: 'translateX(-80px)', opacity: 0 }, { transform: 'none', opacity: 1 }], { duration: 560, delay: at + k * 150, easing: EASE.out });
         });
-      });
-    }
-
-    let t = start + 450;
-    if (parts.subtitle) {
-      tl.animate(parts.subtitle, [{ transform: 'translateX(-60px)', opacity: 0 }, { transform: 'none', opacity: 1 }], {
-        duration: 560, delay: t, easing: EASE.out,
-      });
-      t += 200;
-    }
-    parts.bullets.forEach((li, i) => {
-      const mark = li.querySelector('.c-mark')!;
-      tl.animate(li, [{ transform: 'translateX(-80px)', opacity: 0 }, { transform: 'none', opacity: 1 }], {
-        duration: 560, delay: t + i * 150, easing: EASE.out,
-      });
-      tl.animate(mark, [{ transform: 'translateY(-4px) scale(0) rotate(90deg)' }, { transform: 'translateY(-4px) scale(1) rotate(0)' }], {
-        duration: 480, delay: t + i * 150 + 120, easing: EASE.back,
-      });
+        return;
+      }
+      const words = splitWords(node.querySelector<HTMLElement>('.pp-words')!);
+      const frames = el.role === 'title'
+        ? [{ transform: 'translateY(60px) rotate(4deg)', opacity: 0 }, { transform: 'none', opacity: 1 }]
+        : [{ transform: 'translateX(-40px)', opacity: 0 }, { transform: 'none', opacity: 1 }];
+      words.forEach((w, k) => tl.animate(w, frames, { duration: 600, delay: at + k * (el.role === 'title' ? 70 : 25), easing: EASE.out }));
     });
   }
 }

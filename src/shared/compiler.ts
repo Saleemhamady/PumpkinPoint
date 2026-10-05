@@ -4,10 +4,11 @@
 // style or reordering slides invalidates nothing, because plans are style-independent
 // and keys do not depend on position.
 
+import { planInputs } from './elements.ts';
 import type { BuildCache, CacheEntry, Deck, Planner, RuntimeData, ScenePlan, Slide } from './types.ts';
 
 /** Bump when the plan format or planners change in a way that should rebuild everything. */
-export const PLAN_VERSION = 1;
+export const PLAN_VERSION = 2;
 
 /** Stable 53-bit string hash (cyrb53). */
 export function hash(str: string, seed = 0): string {
@@ -23,16 +24,13 @@ export function hash(str: string, seed = 0): string {
   return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36);
 }
 
+/**
+ * The cache key of a scene: only what the story plan depends on (the slide's words
+ * and its story). Moving, resizing or restyling elements never invalidates a scene,
+ * because positions are applied when the presentation is assembled.
+ */
 export function sceneKey(slide: Slide, planner: Planner): string {
-  const inputs = {
-    v: PLAN_VERSION,
-    planner,
-    layout: slide.layout,
-    title: slide.title.trim(),
-    subtitle: slide.subtitle.trim(),
-    bullets: slide.bullets.map((b) => b.trim()).filter(Boolean),
-    story: slide.story.trim(),
-  };
+  const inputs = { v: PLAN_VERSION, planner, content: planInputs(slide.elements), story: slide.story.trim() };
   return hash(JSON.stringify(inputs));
 }
 
@@ -147,9 +145,6 @@ export function toRuntimeData(deck: Deck, plans: ScenePlan[]): RuntimeData {
   return {
     title: deck.title,
     style: deck.style,
-    scenes: deck.slides.map((s, i) => ({
-      slide: { layout: s.layout, title: s.title, subtitle: s.subtitle, bullets: s.bullets.filter((b) => b.trim()) },
-      plan: plans[i],
-    })),
+    scenes: deck.slides.map((s, i) => ({ elements: s.elements, plan: plans[i] })),
   };
 }

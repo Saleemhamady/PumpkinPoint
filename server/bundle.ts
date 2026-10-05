@@ -5,8 +5,8 @@ import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { build } from 'esbuild';
-import { SLIDE_FONTS, STYLE_FONTS, fontFaceCss, type FontFile } from '../src/shared/fonts.ts';
-import { STYLE_IDS, type StyleId } from '../src/shared/types.ts';
+import { FONT_FAMILIES, fontFaceCss, type FontFile } from '../src/shared/fonts.ts';
+import { FONT_KEYS, type FontKey } from '../src/shared/types.ts';
 
 export async function bundleRuntime(root: string, minify = true): Promise<{ code: string; inputs: string[] }> {
   const result = await build({
@@ -31,7 +31,7 @@ export function fontCss(root: string, files: FontFile[]): string {
   return fontFaceCss(files, (f) => `data:font/woff2;base64,${readFileSync(require.resolve(f.file)).toString('base64')}`);
 }
 
-export function allFontCss(root: string): { styles: Record<StyleId, string>; slides: string } {
-  const styles = Object.fromEntries(STYLE_IDS.map((id) => [id, fontCss(root, STYLE_FONTS[id])])) as Record<StyleId, string>;
-  return { styles, slides: fontCss(root, SLIDE_FONTS) };
+/** @font-face rules (with embedded files) for each font family. */
+export function familyFontCss(root: string): Record<FontKey, string> {
+  return Object.fromEntries(FONT_KEYS.map((k) => [k, fontCss(root, FONT_FAMILIES[k].files)])) as Record<FontKey, string>;
 }

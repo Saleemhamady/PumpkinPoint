@@ -3,12 +3,14 @@
 // whole talk ends up as one connected drawing.
 
 import { MARKER } from '../../shared/palettes.ts';
-import { SETTING_LAYERS, layoutMotifs, type Poly } from '../../shared/motifs.ts';
+import { SETTING_LAYERS, type Poly } from '../../shared/motifs.ts';
+import { themeFor } from '../../shared/theme.ts';
 import type { RuntimeData, RuntimeScene } from '../../shared/types.ts';
 import { EASE, linear, type Timeline } from '../anim.ts';
-import { fitContent, renderContent } from '../content.ts';
 import { h, injectStyle, s } from '../dom.ts';
+import { readingOrder, renderSlide, shapePath } from '../elements.ts';
 import type { Renderer } from '../player.ts';
+import { storyLayout } from '../story.ts';
 
 const CSS = `
 .pp-whiteboard{background:radial-gradient(ellipse at 35% 25%,#FFFFFF 0%,#F6F6F1 70%,#EEEEE7 100%);font-family:'Caveat','Segoe Print','Bradley Hand',cursive}
@@ -16,17 +18,10 @@ const CSS = `
 .wb-cell{position:absolute;width:1600px;height:900px}
 .wb-cell svg{position:absolute;left:0;top:0;overflow:visible}
 .wb-links{position:absolute;left:0;top:0;overflow:visible}
-.wb-text{position:absolute;left:880px;top:110px;width:650px;height:700px;color:#1F2A36;display:flex;flex-direction:column;justify-content:center}
-.wb-text .c-title{font-weight:700;font-size:calc(var(--fs) * 84px);line-height:1.02}
-.wb-text .c-statement{font-weight:700;font-size:calc(var(--fs) * 70px);line-height:1.08}
-.wb-text .c-stat{white-space:nowrap;font-weight:700;font-size:calc(var(--fs) * 210px);line-height:1;color:var(--accent)}
-.wb-text .c-sub{font-weight:600;font-size:calc(var(--fs) * 44px);line-height:1.15;color:var(--accent);margin-top:calc(var(--fs) * 26px)}
-.wb-text .c-bullets{list-style:none;margin:calc(var(--fs) * 34px) 0 0;padding:0}
-.wb-text .c-bullet{display:flex;gap:18px;align-items:flex-start;font-weight:600;font-size:calc(var(--fs) * 46px);line-height:1.12;margin:0 0 calc(var(--fs) * 16px)}
-.wb-text .c-mark{flex:none;width:30px;height:30px;margin-top:calc(var(--fs) * 10px)}
-.wb-text .l-title .c-title{font-size:calc(var(--fs) * 104px)}
+.wb-slide{position:absolute;inset:0}
 .wb-reveal{clip-path:inset(0 100% 0 0)}
-.wb-narr{position:absolute;left:70px;top:796px;width:760px;text-align:center;font-weight:600;font-size:40px;line-height:1.15;color:#5A6470}
+.wb-narr{position:absolute;display:flex;align-items:center;justify-content:center;text-align:center;font-weight:600;font-size:38px;line-height:1.12;color:#5A6470}
+.wb-narr span{display:block}
 .wb-pen{position:absolute;left:0;top:0;width:70px;height:210px;transform-origin:35px 205px;pointer-events:none;filter:drop-shadow(10px 14px 8px rgba(0,0,0,.18));will-change:transform}
 `;
 
@@ -38,10 +33,13 @@ const CELL_H = 900;
 
 interface Pt { x: number; y: number }
 
+/** Rotation applied to a stroke, so the pen follows rotated shapes. */
+interface Turn { a: number; cx: number; cy: number }
+
 type Step =
-  | { kind: 'stroke'; path: SVGPathElement; len: number; color: string; dur: number }
+  | { kind: 'stroke'; path: SVGPathElement; len: number; color: string; dur: number; turn?: Turn }
   | { kind: 'write'; el: HTMLElement; color: string; dur: number; box: { x: number; y: number; w: number; h: number }; lines: number; fontPx: number }
-  | { kind: 'fill'; els: { el: SVGElement; to: number }[]; dur: number }
+  | { kind: 'fade'; els: { el: HTMLElement | SVGElement; from: number; to: number }[]; dur: number }
   | { kind: 'move'; to: Pt; dur: number };
 
 function rng(seed: number): () => number {
@@ -177,86 +175,98 @@ export class WhiteboardRenderer implements Renderer {
 
   private drawCell(index: number, cell: HTMLElement, scene: RuntimeScene, tl: Timeline, delay: number): void {
     const marker = MARKER[scene.plan.mood];
+    const theme = themeFor('whiteboard', scene.plan.mood);
     const origin = cellOrigin(index);
-    cell.style.setProperty('--accent', marker.accent);
     const rand = rng(index * 7919 + 17);
+    const story = storyLayout(scene.elements, scene.plan, { caption: true });
     const svg = s('svg', { width: CELL_W, height: CELL_H, viewBox: `0 0 ${CELL_W} ${CELL_H}` }, cell);
+    if (story.ghost) svg.style.opacity = '0.3';
     const fills = s('g', {}, svg);
     const strokes = s('g', { fill: 'none', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }, svg);
+    const slideLayer = h('div', 'wb-slide', cell);
+    const overlay = s('svg', { width: CELL_W, height: CELL_H, viewBox: `0 0 ${CELL_W} ${CELL_H}` }, cell);
+    const overStrokes = s('g', { fill: 'none', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }, overlay);
     const steps: Step[] = [];
 
-    const addStroke = (d: string, color: string, width: number) => {
-      const path = s('path', { d, stroke: color, 'stroke-width': width }, strokes);
+    const addStroke = (d: string, color: string, width: number, layer: SVGGElement = strokes, turn?: Turn) => {
+      const path = s('path', { d, stroke: color, 'stroke-width': width }, layer);
+      if (turn) path.setAttribute('transform', `rotate(${turn.a} ${turn.cx} ${turn.cy})`);
       const len = Math.max(1, path.getTotalLength());
       path.style.strokeDasharray = `${len} ${len}`;
       path.style.strokeDashoffset = `${len}`;
-      steps.push({ kind: 'stroke', path, len, color, dur: Math.max(45, Math.min(480, len / SPEED)) });
+      steps.push({ kind: 'stroke', path, len, color, dur: Math.max(45, Math.min(480, len / SPEED)), turn });
+      return path;
     };
 
-    // The world: a light sketch of the setting along the bottom of the illustration.
-    const region = { x: 70, y: 120, w: 760, h: 660 };
-    const layers = SETTING_LAYERS[scene.plan.setting];
-    for (const layer of layers) {
-      for (const poly of layer.polys) {
-        if (poly.s === false) continue;
-        const band = isBand(poly);
-        const pts = band ? poly.p.slice(2, -2) : poly.p;
-        const scaled: Poly = { ...poly, p: pts.map((v, i) => (i % 2 ? (v / 100) * region.h : (v / 200) * region.w)), open: band || poly.open };
-        const d = sketchPath(scaled, region.x, region.y, 100, rand, 2);
-        addStroke(d, '#A3ACB6', 2.6);
+    // The story, sketched in the empty part of the slide.
+    const region = story.region;
+    if (!story.ghost) {
+      for (const layer of SETTING_LAYERS[scene.plan.setting]) {
+        for (const poly of layer.polys) {
+          if (poly.s === false) continue;
+          const band = isBand(poly);
+          const pts = band ? poly.p.slice(2, -2) : poly.p;
+          const scaled: Poly = { ...poly, p: pts.map((v, i) => (i % 2 ? (v / 100) * region.h : (v / 200) * region.w)), open: band || poly.open };
+          addStroke(sketchPath(scaled, region.x, region.y, 100, rand, 2), '#A3ACB6', 2.6);
+        }
       }
     }
-
-    // The motifs: outline first, then a quick marker colouring.
-    const placed = layoutMotifs(scene.plan.motifs, region.w, region.h, scene.plan.setting);
-    for (const m of placed) {
-      const x = region.x + m.x;
-      const y = region.y + m.y;
-      const fillEls: { el: SVGElement; to: number }[] = [];
+    for (const m of story.placed) {
+      const fillEls: { el: SVGElement; from: number; to: number }[] = [];
       for (const poly of m.def.polys) {
         // Colour whole shapes (outlines and plain polygons), not the facets of fans.
         if (poly.s !== false && !poly.open && poly.t >= 2) {
           const color = poly.t === 2 ? marker.ink : marker.accent;
           const to = poly.t === 2 ? 0.16 : poly.t === 3 ? 0.32 : 0.5;
-          const fp = s('path', { d: sketchPath({ ...poly, open: false }, x, y, m.size, rand, 1.2), fill: color, opacity: 0 }, fills);
-          fillEls.push({ el: fp, to });
+          const fp = s('path', { d: sketchPath({ ...poly, open: false }, m.x, m.y, m.size, rand, 1.2), fill: color }, fills);
+          fp.style.opacity = '0';
+          fillEls.push({ el: fp, from: 0, to });
         }
         if (poly.s === false) continue;
         const color = poly.t >= 3 ? marker.accent : marker.ink;
-        addStroke(sketchPath(poly, x, y, m.size, rand, m.size * 0.012), color, m.role === 'hero' ? 3.6 : 3);
+        addStroke(sketchPath(poly, m.x, m.y, m.size, rand, m.size * 0.012), color, m.role === 'hero' ? 3.6 : 3);
       }
-      if (fillEls.length) steps.push({ kind: 'fill', els: fillEls, dur: 260 });
+      if (fillEls.length) steps.push({ kind: 'fade', els: fillEls, dur: 260 });
     }
 
-    // The story caption under the drawing.
-    if (scene.plan.narration) {
-      const narr = h('div', 'wb-narr wb-reveal', cell, scene.plan.narration);
-      steps.push(this.writeStep(narr, '#5A6470'));
+    // The story caption under the drawing, when there is room.
+    if (story.caption && scene.plan.narration) {
+      const c = story.caption;
+      const narr = h('div', 'wb-narr', cell);
+      Object.assign(narr.style, { left: `${c.x}px`, top: `${c.y}px`, width: `${c.w}px`, height: `${c.h}px` });
+      const line = h('span', 'wb-reveal', narr, scene.plan.narration);
+      steps.push(this.writeStep(line, '#5A6470'));
     }
 
-    // The slide itself, written on the right.
-    const textBox = h('div', 'wb-text', cell);
-    const parts = renderContent(scene.slide, textBox);
-    fitContent(parts.root, 650, 700);
-    parts.title.classList.add('wb-reveal');
-    steps.push(this.writeStep(parts.title, marker.ink));
-    const tb = this.boxOf(parts.title);
-    if (scene.slide.layout !== 'stat') {
-      const uy = tb.y + tb.h + 6;
-      const uw = Math.min(tb.w, 520);
-      addStroke(`M${tb.x} ${uy} Q${tb.x + uw * 0.3} ${uy + 9} ${tb.x + uw * 0.55} ${uy + 2} T${tb.x + uw} ${uy + 4}`, marker.accent, 5);
-    }
-    if (parts.subtitle) {
-      parts.subtitle.classList.add('wb-reveal');
-      steps.push(this.writeStep(parts.subtitle, marker.accent));
-    }
-    for (const li of parts.bullets) {
-      const mark = li.querySelector<HTMLElement>('.c-mark')!;
-      const text = li.querySelector<HTMLElement>('.c-text')!;
-      const mb = this.boxOf(mark);
-      addStroke(`M${mb.x + 3} ${mb.y + 16} L${mb.x + 12} ${mb.y + 26} L${mb.x + 28} ${mb.y + 4}`, marker.accent, 4.5);
-      text.classList.add('wb-reveal');
-      steps.push(this.writeStep(text, marker.ink));
+    // The slide itself, written and drawn where the author placed each element.
+    const nodes = renderSlide(scene.elements, theme, slideLayer);
+    const items = readingOrder(scene.elements.map((el, i) => ({ el, node: nodes[i] })));
+    for (const { el, node } of items) {
+      const turn = el.rotation ? { a: el.rotation, cx: el.x + el.w / 2, cy: el.y + el.h / 2 } : undefined;
+      if (el.type === 'text') {
+        const inner = node.querySelector<HTMLElement>('.pp-words');
+        if (!inner || el.rotation) {
+          node.style.opacity = '0';
+          steps.push({ kind: 'fade', els: [{ el: node, from: 0, to: 1 }], dur: 400 });
+          continue;
+        }
+        inner.classList.add('wb-reveal');
+        steps.push(this.writeStep(inner, node.style.color || theme.ink));
+        if (el.role === 'title') {
+          const tb = this.boxOf(inner);
+          const lastLineW = Math.min(tb.w, 560);
+          const ux = el.align === 'center' ? tb.x + (tb.w - lastLineW) / 2 : el.align === 'right' ? tb.x + tb.w - lastLineW : tb.x;
+          const uy = tb.y + tb.h + 8;
+          addStroke(`M${ux} ${uy} Q${ux + lastLineW * 0.3} ${uy + 9} ${ux + lastLineW * 0.55} ${uy + 2} T${ux + lastLineW} ${uy + 4}`, marker.accent, 5, overStrokes);
+        }
+        continue;
+      }
+      // Shapes and pictures: sketch the outline, then the real thing fades in under it.
+      node.style.opacity = '0';
+      const outline = el.type === 'shape' ? shapePath(el.shape, el.w, el.h, 0) : shapePath('rect', el.w, el.h, 0);
+      const d = translatePath(outline, el.x, el.y);
+      const stroke = addStroke(d, el.type === 'shape' && el.shape === 'line' ? theme.ink : marker.ink, 3.4, overStrokes, turn);
+      steps.push({ kind: 'fade', els: [{ el: node, from: 0, to: 1 }, { el: stroke, from: 1, to: 0 }], dur: 420 });
     }
     steps.push({ kind: 'move', to: { x: CELL_W - 100, y: CELL_H + 60 }, dur: 500 });
 
@@ -307,7 +317,7 @@ export class WhiteboardRenderer implements Renderer {
           st.path.style.strokeDashoffset = `${st.len * (1 - p)}`;
           setColor(st.color);
           const pt = st.path.getPointAtLength(st.len * p);
-          penTo(pt);
+          penTo(st.turn ? rotatePoint(pt, st.turn) : pt);
           break;
         }
         case 'write': {
@@ -325,8 +335,8 @@ export class WhiteboardRenderer implements Renderer {
           });
           break;
         }
-        case 'fill':
-          for (const f of st.els) f.el.setAttribute('opacity', String(f.to * p));
+        case 'fade':
+          for (const f of st.els) f.el.style.opacity = String(f.from + (f.to - f.from) * p);
           break;
         case 'move': {
           moveFrom ??= { x: this.penAt.x - origin.x, y: this.penAt.y - origin.y };
@@ -346,6 +356,26 @@ export class WhiteboardRenderer implements Renderer {
       if (cursor < steps.length && now >= starts[cursor]) apply(steps[cursor], (now - starts[cursor]) / steps[cursor].dur);
     }, linear);
   }
+}
+
+function rotatePoint(p: Pt, t: Turn): Pt {
+  const a = (t.a * Math.PI) / 180;
+  const dx = p.x - t.cx;
+  const dy = p.y - t.cy;
+  return { x: t.cx + dx * Math.cos(a) - dy * Math.sin(a), y: t.cy + dx * Math.sin(a) + dy * Math.cos(a) };
+}
+
+/** Move an absolute path (M/L/H/V/A/Z commands from shapePath) by (dx, dy). */
+function translatePath(d: string, dx: number, dy: number): string {
+  return d.replace(/([MLHVA])([^MLHVAZ]*)/g, (_, cmd: string, args: string) => {
+    const n = args.trim().split(/[\s,]+/).filter(Boolean).map(Number);
+    if (cmd === 'H') return `H${n[0] + dx}`;
+    if (cmd === 'V') return `V${n[0] + dy}`;
+    if (cmd === 'A') return `A${n[0]} ${n[1]} ${n[2]} ${n[3]} ${n[4]} ${n[5] + dx} ${n[6] + dy}`;
+    const out: number[] = [];
+    for (let i = 0; i < n.length; i += 2) out.push(n[i] + dx, n[i + 1] + dy);
+    return cmd + out.join(' ');
+  });
 }
 
 /** Setting bands (waves, hills) are drawn as open lines along their top edge. */

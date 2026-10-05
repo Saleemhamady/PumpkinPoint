@@ -3,7 +3,8 @@
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import Anthropic from '@anthropic-ai/sdk';
-import type { SlideContent } from '../src/shared/types.ts';
+import type { PolishText } from '../src/shared/plan.ts';
+import type { SlideElement } from '../src/shared/types.ts';
 import { PumpkinAI, type AiConfig } from './ai.ts';
 
 type Next = (err?: unknown) => void;
@@ -40,7 +41,7 @@ function errorMessage(err: unknown): { status: number; message: string } {
   return { status: 500, message: err instanceof Error ? err.message : String(err) };
 }
 
-const asSlides = (v: unknown): SlideContent[] => (Array.isArray(v) ? (v as SlideContent[]) : []);
+const strings = (v: unknown): string[] => (Array.isArray(v) ? v.map((x) => String(x ?? '')) : []);
 
 export function createApiHandler(config: AiConfig) {
   const ai = new PumpkinAI(config);
@@ -55,14 +56,13 @@ export function createApiHandler(config: AiConfig) {
         case '/slides':
           return send(res, 200, await ai.generateSlides(String(body.topic ?? ''), Number(body.count ?? 6), String(body.audience ?? '')));
         case '/polish':
-          return send(res, 200, await ai.polishSlide(body.slide as SlideContent, asSlides(body.context)));
+          return send(res, 200, { texts: await ai.polishSlide(Array.isArray(body.texts) ? (body.texts as PolishText[]) : [], strings(body.context)) });
         case '/stories': {
           const only = typeof body.only === 'number' ? body.only : null;
-          const existing = Array.isArray(body.existing) ? body.existing.map(String) : [];
-          return send(res, 200, { stories: await ai.writeStories(String(body.title ?? ''), asSlides(body.slides), existing, only) });
+          return send(res, 200, { stories: await ai.writeStories(String(body.title ?? ''), strings(body.slides), strings(body.existing), only) });
         }
         case '/scene':
-          return send(res, 200, await ai.compileScene(body.slide as SlideContent, String(body.story ?? ''), Number(body.index ?? 0), Number(body.total ?? 1)));
+          return send(res, 200, await ai.compileScene(Array.isArray(body.elements) ? (body.elements as SlideElement[]) : [], String(body.story ?? ''), Number(body.index ?? 0), Number(body.total ?? 1)));
         default:
           return next();
       }

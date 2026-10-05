@@ -620,7 +620,7 @@ export function layoutMotifs(
   const hero = resolved.find((m) => m.role === 'hero') ?? resolved[0];
   if (!hero) return placed;
   const supports = resolved.filter((m) => m !== hero).slice(0, 2);
-  const s = Math.min(w * 0.56, h * 0.6);
+  const s = Math.min(w * 0.64, h * 0.62);
   const heroSky = hero.def.place === 'sky';
   placed.push({
     def: hero.def, role: 'hero', motion: hero.motion, size: s,

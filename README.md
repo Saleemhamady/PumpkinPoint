@@ -41,9 +41,9 @@ npm run sample            # writes samples/origami.html, book.html, whiteboard.h
 
 ## Using the editor
 
-1. **Slides (Layer 1).** Each row is one slide: choose a layout (title, bullets,
-   statement or big number) and fill in the text. ✨ **Polish** tidies a slide with AI.
-   ✨ **Generate slides** drafts a whole deck from a topic.
+1. **Slides (Layer 1).** Each row shows a slide's thumbnail and its text outline.
+   **Click the thumbnail** to open the slide editor (see below). ✨ **Polish** tightens
+   the wording with AI. ✨ **Generate slides** drafts a whole deck from a topic.
 2. **Story (Layer 2).** Next to each slide, describe what happens in the story world
    while that slide is up. ✨ **Write the whole story** reads all the slides, picks one
    visual metaphor (a voyage, a growing seed, a climb…) and writes an arc across the
@@ -52,19 +52,47 @@ npm run sample            # writes samples/origami.html, book.html, whiteboard.h
 4. **Build → Preview / Present / Export HTML.** Clicks, arrow keys, Page Up/Down
    (presentation clickers), space and swipes move through scenes in slide order.
    Type a number then Enter to jump; `F` toggles full screen.
-5. **Export PDF** prints the plain slides (Layer 1), one per page.
+5. **Export PDF** prints the slides (Layer 1), one per page.
 
-Projects autosave in the browser; **Save** / **Open…** read and write `.pumpkin.json`
-files. Undo/redo with Ctrl+Z / Ctrl+Shift+Z.
+Projects autosave in the browser (IndexedDB, so pictures fit); **Save** / **Open…** read
+and write `.pumpkin.json` files. Undo/redo with Ctrl+Z / Ctrl+Shift+Z.
+
+### The slide editor
+
+Slides are free-form canvases (1600×900, the same size as the presentation stage).
+
+- **Add** text, shapes (rectangle, rounded, ellipse, triangle, diamond, star, arrow,
+  line) and pictures (pick, paste or drag them in; large pictures are downscaled).
+- **Select** by clicking (Shift-click for several, Ctrl+A for all), or from the items
+  list. **Move** by dragging or with the arrow keys (Shift = 10px). Moving snaps to the
+  slide's centre and edges and to other items; hold Alt to place freely.
+- **Resize** with the handles (pictures keep their shape; Shift keeps it for anything).
+  **Rotate** with the round handle (Shift = 15° steps).
+- **Edit text in place** with a double-click or Enter. The properties panel sets the
+  role (title, subtitle, body, big number), typeface, size, bold/italic, bullets,
+  alignment and colour; shapes get fill and outline; pictures get fit, rounded corners
+  and a description the AI can read.
+- **Arrange**: bring forward/back, align items to each other or to the slide,
+  duplicate (Ctrl+D), copy/paste between slides (Ctrl+C / Ctrl+V), delete.
+- **Arrange text** snaps the slide's text back into a template (title, bullets,
+  statement, big number) without touching pictures and shapes.
+- The dashed **story area** shows where the story illustration will be drawn: the
+  largest empty part of the slide. Keep some space free and the story never covers
+  your content; fill the slide completely and it is drawn faintly behind instead.
+  In the pop-up book style a dashed line marks the book's spine.
+
+Colours can be fixed, or set to a **theme colour** (text colour, accent, soft, paper).
+Theme colours follow the animation style and each scene's mood, so text stays readable
+when the story turns the background from dawn-pink to storm-grey.
 
 ## The four styles
 
 | Style | What happens |
 | --- | --- |
-| **Origami** | Figures unfold facet by facet out of paper, the landscape folds up in layers, and the slide arrives as a letter unfolding in thirds. A figure that appears in consecutive scenes glides to its new place instead of refolding. |
-| **Pop-up book** | Each scene is a spread: the story pops up off the left page, the slide is printed on the right. Clicking turns the page; jumping riffles through pages. |
-| **Whiteboard** | A marker sketches the scene, writes the story caption and the slide, then the camera pans along one endless board to the next scene, so the talk becomes one connected drawing. |
-| **Kinetic typography** | The story is told in big animated words over bold colour fields; colour wipes carry the mood from scene to scene, then the slide lands. Numbers count up. |
+| **Origami** | Figures unfold facet by facet out of paper in the slide's free space and the landscape folds up in layers. Your text folds down like paper flaps; shapes and pictures unfold from the middle. A figure that appears in consecutive scenes glides to its new place instead of refolding. |
+| **Pop-up book** | Each slide is printed across a spread and its story pops up out of the free space on the pages. Clicking turns the page; jumping riffles through pages. |
+| **Whiteboard** | A marker sketches the story in the free space, writes your text where you placed it and outlines your shapes and pictures, then the camera pans along one endless board to the next scene, so the talk becomes one connected drawing. |
+| **Kinetic typography** | The story is told in big animated words over bold colour fields; colour wipes carry the mood from scene to scene, then your slide lands piece by piece. Numbers count up. |
 
 In every style the **mood** of each scene drives the background, so the backdrop
 itself changes as the story turns (dawn → storm → light → triumph).
@@ -101,9 +129,11 @@ sails from one scene into the next).
 ### Incremental compile
 
 Each scene is cached under a hash of exactly the inputs that affect it: the slide's
-layout and text, and its story (`src/shared/compiler.ts`).
+words (and picture descriptions) and its story (`src/shared/compiler.ts`).
 
-- Edit a slide or its story → only that scene recompiles.
+- Change a slide's words or its story → only that scene recompiles.
+- Move, resize, recolour or add shapes and pictures → nothing recompiles; positions are
+  applied when the HTML is assembled.
 - Change the style, reorder slides or rename the deck → nothing recompiles.
 - The final HTML is assembled from cached plans in milliseconds.
 
@@ -112,9 +142,11 @@ reused.
 
 ### The exported file
 
-One self-contained `.html` (≈150–200 KB): a small framework-free player (~70 KB), the
-style's fonts embedded as base64, and the scene data. It needs no internet connection
-and no server.
+One self-contained `.html` (≈150–250 KB plus any pictures): a small framework-free
+player (~70 KB), the fonts the deck uses embedded as base64, the slides' elements
+(pictures as data URLs) and the scene plans. It needs no internet connection and no
+server. The editor's canvas, thumbnails and PDF use the same element renderer as the
+player (`src/runtime/elements.ts`), so a slide looks the same everywhere.
 
 ### AI
 
@@ -126,10 +158,12 @@ opt into server-side refusal fallbacks (`fallbacks: "default"`).
 ## Project layout
 
 ```
-src/shared/     data model, motif library, palettes, planners, compiler, HTML assembly
+src/shared/     data model, slide elements and templates, themes, motif library,
+                planners, compiler, HTML assembly
 src/runtime/    the presentation player bundled into every export
+  elements.ts   draws text, shapes and pictures (shared with the editor)
   styles/       origami.ts · book.ts · whiteboard.ts · kinetic.ts
-src/editor/     the React editor
+src/editor/     the React editor; SlideEditor.tsx + Inspector.tsx are the canvas editor
 server/         AI endpoints, runtime bundling, Vite plugin
 scripts/        export-sample.ts (CLI export of the sample deck)
 tests/          vitest unit tests
@@ -155,6 +189,7 @@ tests/          vitest unit tests
 
 ## Not done yet
 
-- Images on slides, and AI-generated custom illustrations beyond the motif library.
+- AI-generated custom illustrations beyond the motif library.
 - Editing a scene plan by hand (change a motif or mood without changing the story).
+- Rich text inside one text box (mixed bold/colour within a line), tables and charts.
 - Speaker notes and a presenter view.

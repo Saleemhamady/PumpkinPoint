@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { MOTIFS, getMotif, layoutMotifs, SETTING_LAYERS } from '../src/shared/motifs.ts';
+import { layoutElements } from '../src/shared/elements.ts';
 import { kineticLines, offlinePlan, offlinePolish, offlineStories, sanitizePlan } from '../src/shared/plan.ts';
 import { sampleDeck } from '../src/shared/sample.ts';
 import { MOODS, SETTINGS, type ScenePlan } from '../src/shared/types.ts';
@@ -59,7 +60,7 @@ describe('sanitizePlan', () => {
 
 describe('offline planner', () => {
   it('picks motifs, setting and mood from the story', () => {
-    const plan = offlinePlan({ layout: 'bullets', title: 'Problem', subtitle: '', bullets: [] }, 'A storm rolls in over the sea and the boat is lost.', 1, 5);
+    const plan = offlinePlan(layoutElements({ layout: 'bullets', title: 'Problem', subtitle: '', bullets: [] }), 'A storm rolls in over the sea and the boat is lost.', 1, 5);
     expect(plan.motifs[0].motif).toBe('storm');
     expect(plan.motifs.map((m) => m.motif)).toContain('sailboat');
     expect(plan.setting).toBe('sea');
@@ -68,7 +69,7 @@ describe('offline planner', () => {
 
   it('always returns a usable plan, even for empty slides', () => {
     for (const [i, total] of [[0, 1], [0, 3], [1, 3], [2, 3]]) {
-      const plan = offlinePlan({ layout: 'title', title: '', subtitle: '', bullets: [] }, '', i, total);
+      const plan = offlinePlan([], '', i, total);
       expect(plan.motifs.length).toBeGreaterThan(0);
       expect(MOODS).toContain(plan.mood);
       expect(SETTINGS).toContain(plan.setting);
@@ -87,16 +88,17 @@ describe('offline planner', () => {
 
   it('writes one story per slide', () => {
     const deck = sampleDeck();
-    const stories = offlineStories(deck.slides);
+    const stories = offlineStories(deck.slides.map((s) => s.elements));
     expect(stories).toHaveLength(deck.slides.length);
     expect(stories.every((s) => s.length > 10)).toBe(true);
   });
 
-  it('tidies slides', () => {
-    const out = offlinePolish({ layout: 'bullets', title: 'growth', subtitle: '', bullets: ['- more users.', '', '  faster '] });
-    expect(out.title).toBe('Growth');
-    expect(out.bullets).toEqual(['More users', 'Faster']);
-    expect(offlinePolish({ layout: 'bullets', title: '42%', subtitle: 'retention', bullets: [] }).layout).toBe('stat');
+  it('tidies wording without touching roles', () => {
+    const out = offlinePolish([
+      { id: 'a', role: 'title', text: 'growth', list: false },
+      { id: 'b', role: 'body', text: '- more users.\n\n  faster ', list: true },
+    ]);
+    expect(out).toEqual([{ id: 'a', text: 'Growth' }, { id: 'b', text: 'More users\nFaster' }]);
   });
 });
 

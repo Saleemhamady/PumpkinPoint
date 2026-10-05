@@ -8,7 +8,7 @@ describe('assembleHtml', () => {
       title: 'Tom & <Jerry>',
       style: 'kinetic',
       scenes: [{
-        slide: { layout: 'title', title: '</script><script>alert(1)</script>', subtitle: ' ', bullets: [] },
+        elements: [{ id: 't', type: 'text', role: 'title', text: '</script><script>alert(1)</script>\u2028', x: 0, y: 0, w: 100, h: 100, rotation: 0, font: 'auto', size: 40, bold: true, italic: false, align: 'left', valign: 'top', color: 'ink', list: false }],
         plan: { mood: 'calm', setting: 'none', motifs: [], narration: '', kinetic: [] },
       }],
     };
@@ -20,6 +20,6 @@ describe('assembleHtml', () => {
   });
 
   it('escapes line separators', () => {
-    expect(scriptSafeJson('a b')).toBe('"a\\u2028b"');
+    expect(scriptSafeJson('a\u2028b')).toBe('"a\\u2028b"');
   });
 });

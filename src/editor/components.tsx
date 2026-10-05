@@ -1,16 +1,17 @@
 // Presentational pieces of the editor.
 
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { memo, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { getMotif } from '../shared/motifs.ts';
 import { PAPER } from '../shared/palettes.ts';
-import type { Layout, ScenePlan, StyleId } from '../shared/types.ts';
-import { SLIDE_H, SLIDE_W, slideHtml } from './slideView.ts';
-import type { SlideContent } from '../shared/types.ts';
+import type { Theme } from '../shared/theme.ts';
+import { CANVAS_H, CANVAS_W, type Layout, type ScenePlan, type ShapeKind, type SlideElement, type StyleId } from '../shared/types.ts';
+import { shapePath } from '../runtime/elements.ts';
+import { drawSlide } from './slideView.ts';
 
 export const STYLE_INFO: Record<StyleId, { name: string; blurb: string; icon: ReactNode }> = {
   origami: {
     name: 'Origami',
-    blurb: 'Paper figures fold into shape; slides unfold like letters.',
+    blurb: 'Paper figures fold into shape; your slide unfolds like paper.',
     icon: (
       <svg viewBox="0 0 48 48" aria-hidden="true">
         <path d="M6 30 L24 12 L24 34 Z" fill="#F6B999" />
@@ -64,14 +65,29 @@ export const LAYOUT_LABELS: Record<Layout, string> = {
   stat: 'Big number',
 };
 
-export function SlideThumb({ slide, index, width }: { slide: SlideContent; index: number; width: number }) {
-  const k = width / SLIDE_W;
+/** A slide drawn with the presentation's renderer, scaled to `width`. */
+export const StaticSlide = memo(function StaticSlide({ elements, theme, width }: { elements: SlideElement[]; theme: Theme; width: number }) {
+  const host = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    if (host.current) drawSlide(host.current, elements, theme);
+  }, [elements, theme]);
+  const k = width / CANVAS_W;
   return (
-    <div className="thumb" style={{ width, height: SLIDE_H * k }}>
-      <div className="thumb-inner" style={{ transform: `scale(${k})` }} dangerouslySetInnerHTML={{ __html: slideHtml(slide, index) }} />
+    <div className="thumb" style={{ width, height: CANVAS_H * k }}>
+      <div ref={host} className="thumb-inner" style={{ transform: `scale(${k})` }} />
     </div>
   );
-}
+});
+
+export const SHAPE_ICONS: Record<ShapeKind, ReactNode> = Object.fromEntries(
+  (['rect', 'round', 'ellipse', 'triangle', 'diamond', 'star', 'arrow', 'line'] as ShapeKind[]).map((kind) => [
+    kind,
+    <svg key={kind} viewBox="0 0 40 40" aria-hidden="true">
+      <path d={shapePath(kind, 32, kind === 'line' || kind === 'arrow' ? 20 : 32, kind === 'line' ? 0 : 1)} transform={kind === 'line' || kind === 'arrow' ? 'translate(4 10)' : 'translate(4 4)'}
+        fill={kind === 'line' ? 'none' : 'currentColor'} stroke="currentColor" strokeWidth={kind === 'line' ? 3 : 0} strokeLinecap="round" />
+    </svg>,
+  ]),
+) as Record<ShapeKind, ReactNode>;
 
 export function PlanChips({ plan }: { plan: ScenePlan }) {
   const pal = PAPER[plan.mood];

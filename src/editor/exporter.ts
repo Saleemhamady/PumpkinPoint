@@ -1,13 +1,18 @@
 // Turns the compiled deck into the single-file presentation.
 
 import runtimeCode from 'virtual:pumpkin-runtime';
-import { styleFonts } from 'virtual:pumpkin-fonts';
+import { familyFonts } from 'virtual:pumpkin-fonts';
 import { assembleHtml } from '../shared/assemble.ts';
 import { toRuntimeData } from '../shared/compiler.ts';
-import type { Deck, ScenePlan } from '../shared/types.ts';
+import { fontsForDeck } from '../shared/fonts.ts';
+import { FONT_KEYS, type Deck, type ScenePlan } from '../shared/types.ts';
+
+/** @font-face rules for every family (the editor shows all of them). */
+export const allFontsCss = FONT_KEYS.map((k) => familyFonts[k]).join('\n');
 
 export function presentationHtml(deck: Deck, plans: ScenePlan[]): string {
-  return assembleHtml(toRuntimeData(deck, plans), runtimeCode, styleFonts[deck.style]);
+  const fonts = fontsForDeck(deck).map((k) => familyFonts[k]).join('\n');
+  return assembleHtml(toRuntimeData(deck, plans), runtimeCode, fonts);
 }
 
 export function safeFilename(title: string, ext: string): string {

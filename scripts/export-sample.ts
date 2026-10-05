@@ -9,21 +9,23 @@ import { toRuntimeData } from '../src/shared/compiler.ts';
 import { offlinePlan } from '../src/shared/plan.ts';
 import { sampleDeck } from '../src/shared/sample.ts';
 import { STYLE_IDS } from '../src/shared/types.ts';
-import { allFontCss, bundleRuntime } from '../server/bundle.ts';
+import { familyFontCss, bundleRuntime } from '../server/bundle.ts';
+import { fontsForDeck } from '../src/shared/fonts.ts';
 
 const root = process.cwd();
 const outDir = path.join(root, process.argv[2] ?? 'samples');
 mkdirSync(outDir, { recursive: true });
 
 const deck = sampleDeck();
-const plans = deck.slides.map((s, i) => offlinePlan(s, s.story, i, deck.slides.length));
+const plans = deck.slides.map((s, i) => offlinePlan(s.elements, s.story, i, deck.slides.length));
 const { code } = await bundleRuntime(root, process.env.MINIFY !== '0');
-const fonts = allFontCss(root);
+const fonts = familyFontCss(root);
 
 for (const style of STYLE_IDS) {
-  const data = toRuntimeData({ ...deck, style }, plans);
+  const styled = { ...deck, style };
+  const data = toRuntimeData(styled, plans);
   const file = path.join(outDir, `${style}.html`);
-  writeFileSync(file, assembleHtml(data, code, fonts.styles[style]));
+  writeFileSync(file, assembleHtml(data, code, fontsForDeck(styled).map((k) => fonts[k]).join('\n')));
   console.log(`wrote ${path.relative(root, file)}`);
 }
 for (const [i, p] of plans.entries()) {

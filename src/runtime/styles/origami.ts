@@ -1,14 +1,17 @@
-// Origami: the story is folded out of paper. Figures unfold facet by facet, the
-// landscape folds up in layers, the slide arrives as a letter unfolding in thirds,
-// and figures that appear in consecutive scenes glide over instead of refolding.
+// Origami: the story is folded out of paper. Figures unfold facet by facet in the
+// empty part of the slide, the landscape folds up in layers, the slide's own text
+// folds down like paper flaps and its shapes and pictures unfold from the middle.
+// Figures that appear in consecutive scenes glide over instead of refolding.
 
 import { PAPER, type PaperPalette } from '../../shared/palettes.ts';
-import { SETTING_LAYERS, layoutMotifs, polyPath, type PlacedMotif, type Poly } from '../../shared/motifs.ts';
-import type { Motion, RuntimeData, RuntimeScene, Setting } from '../../shared/types.ts';
+import { SETTING_LAYERS, polyPath, type PlacedMotif, type Poly } from '../../shared/motifs.ts';
+import { themeFor } from '../../shared/theme.ts';
+import { CANVAS_H, CANVAS_W, type Motion, type RuntimeData, type RuntimeScene, type Setting, type SlideElement } from '../../shared/types.ts';
 import { EASE, type Timeline } from '../anim.ts';
-import { fitContent, renderContent } from '../content.ts';
 import { clipPolygon, h, injectStyle, s } from '../dom.ts';
+import { readingOrder, renderSlide } from '../elements.ts';
 import type { Renderer } from '../player.ts';
+import { storyLayout } from '../story.ts';
 
 const CSS = `
 .pp-origami{font-family:'Nunito',system-ui,sans-serif}
@@ -27,29 +30,11 @@ const CSS = `
 .og-fig-inner{position:absolute;inset:0;transform-style:preserve-3d}
 .og-facet{position:absolute;inset:0;transition:background-color .9s ease;backface-visibility:visible}
 .og-shadow{position:absolute;height:26px;border-radius:50%;background:radial-gradient(closest-side,rgba(0,0,0,.22),rgba(0,0,0,0));transform-origin:50% 50%}
-.og-card-wrap{position:absolute;left:1000px;top:130px;width:520px;height:660px;perspective:1800px}
-.og-card{position:absolute;inset:0;transform-style:preserve-3d}
-.og-panel{position:absolute;left:0;width:100%;transform-style:preserve-3d}
-.og-face{position:absolute;inset:0;backface-visibility:hidden;-webkit-backface-visibility:hidden;background:#FFFDF7;overflow:hidden}
-.og-face.back{transform:rotateX(180deg);background:linear-gradient(#EDE6D8,#E2D9C7)}
-.og-p0 .og-face.front::after,.og-p2 .og-face.front::after{content:'';position:absolute;inset:0;pointer-events:none}
-.og-p0 .og-face.front::after{background:linear-gradient(to bottom,rgba(0,0,0,0) 70%,rgba(0,0,0,.05))}
-.og-p2 .og-face.front::after{background:linear-gradient(to bottom,rgba(0,0,0,.06),rgba(0,0,0,0) 30%)}
-.og-p1 .og-face.front{box-shadow:0 30px 60px -20px rgba(0,0,0,.25)}
-.og-content{position:absolute;left:0;width:520px;height:660px;padding:52px 46px;box-sizing:border-box;color:#2B2620;display:flex;flex-direction:column;justify-content:center}
-.og-content .c-title{font-weight:900;font-size:calc(var(--fs) * 66px);line-height:1.05;letter-spacing:-.01em}
-.og-content .c-statement{font-weight:800;font-size:calc(var(--fs) * 54px);line-height:1.15}
-.og-content .c-stat{white-space:nowrap;font-weight:900;font-size:calc(var(--fs) * 170px);line-height:1;color:var(--accent);letter-spacing:-.02em}
-.og-content .c-sub{font-weight:600;font-size:calc(var(--fs) * 34px);line-height:1.3;color:#6B6155;margin-top:calc(var(--fs) * 16px)}
-.og-content .c-bullets{list-style:none;margin:calc(var(--fs) * 30px) 0 0;padding:0}
-.og-content .c-bullet{display:flex;gap:16px;align-items:baseline;font-weight:600;font-size:calc(var(--fs) * 34px);line-height:1.28;margin:0 0 calc(var(--fs) * 18px)}
-.og-content .c-mark{flex:none;width:16px;height:16px;background:var(--accent);clip-path:polygon(0 0,100% 50%,0 100%,30% 50%);transform:translateY(1px)}
-.og-content .l-title .c-title{font-size:calc(var(--fs) * 80px)}
-.og-content::before{content:'';position:absolute;left:46px;top:30px;width:56px;height:8px;background:var(--accent);clip-path:polygon(0 0,100% 0,88% 100%,0 100%)}
+.og-slide{position:absolute;inset:0;perspective:1600px}
+.og-fold{position:absolute;perspective:1200px;transform-origin:50% 50%}
+.og-fold>.pp-el{left:0!important;top:0!important;rotate:none!important}
 `;
 
-const FIG_REGION = { x: 30, y: 60, w: 940, h: 800 };
-const CARD_H = 660;
 
 interface Fig {
   motif: string;
@@ -74,7 +59,7 @@ export class OrigamiRenderer implements Renderer {
   private figHost!: HTMLElement;
   private figs: Fig[] = [];
   private settingView: SettingView | null = null;
-  private card: HTMLElement | null = null;
+  private slide: HTMLElement | null = null;
 
   mount(stage: HTMLElement, data: RuntimeData): void {
     injectStyle('pp-origami', CSS);
@@ -96,8 +81,8 @@ export class OrigamiRenderer implements Renderer {
     const prevMood = from === null ? null : this.data.scenes[from].plan.mood;
     const first = from === null;
 
-    // 1. The old letter folds away.
-    if (this.card) this.foldCardAway(this.card, tl);
+    // 1. The old slide folds away.
+    if (this.slide) this.foldSlideAway(this.slide, tl);
 
     // 2. The background paper changes colour with the mood.
     if (scene.plan.mood !== prevMood) this.paintBackground(pal, tl, first ? 0 : 200);
@@ -106,7 +91,9 @@ export class OrigamiRenderer implements Renderer {
     this.updateSetting(scene.plan.setting, pal, tl, first ? 100 : 250);
 
     // 4. Figures: shared motifs glide to their new place, the rest fold away / unfold.
-    const placed = layoutMotifs(scene.plan.motifs, FIG_REGION.w, FIG_REGION.h, scene.plan.setting);
+    const story = storyLayout(scene.elements, scene.plan);
+    const placed = story.placed;
+    tl.animate(this.figHost, [{ opacity: Number(getComputedStyle(this.figHost).opacity) }, { opacity: story.ghost ? 0.28 : 1 }], { duration: 600, fill: 'forwards' });
     const next: Fig[] = [];
     const leaving = [...this.figs];
     let unfoldAt = first ? 450 : 950;
@@ -124,8 +111,8 @@ export class OrigamiRenderer implements Renderer {
     for (const fig of leaving) this.foldFigAway(fig, tl);
     this.figs = next;
 
-    // 5. The new letter unfolds.
-    this.card = this.unfoldCard(scene, pal, tl, Math.max(first ? 900 : 1250, unfoldAt - 100));
+    // 5. The slide's own elements unfold.
+    this.slide = this.unfoldSlide(scene, tl, Math.max(first ? 800 : 1150, unfoldAt - 200));
   }
 
   // ---- background -------------------------------------------------------------------
@@ -262,82 +249,85 @@ export class OrigamiRenderer implements Renderer {
 
   // ---- the letter -----------------------------------------------------------------------
 
-  private unfoldCard(scene: RuntimeScene, pal: PaperPalette, tl: Timeline, delay: number): HTMLElement {
-    const wrap = h('div', 'og-card-wrap', this.stage);
-    wrap.style.setProperty('--accent', pal.tones[4]);
-    const card = h('div', 'og-card', wrap);
-    const third = CARD_H / 3;
-
-    // Lay the content out once, then reuse it (clipped) on each of the three panels.
-    const content = h('div', 'og-content', card);
-    const parts = renderContent(scene.slide, content);
-    fitContent(parts.root, 520 - 92, CARD_H - 104);
-    content.remove();
-
-    const panels = [0, 1, 2].map((i) => {
-      const panel = h('div', `og-panel og-p${i}`, card);
-      panel.style.top = `${i * third}px`;
-      panel.style.height = `${third}px`;
-      const front = h('div', 'og-face front', panel);
-      const copy = content.cloneNode(true) as HTMLElement;
-      copy.style.top = `${-i * third}px`;
-      front.appendChild(copy);
-      if (i !== 1) h('div', 'og-face back', panel);
-      return panel;
+  private unfoldSlide(scene: RuntimeScene, tl: Timeline, delay: number): HTMLElement {
+    const layer = h('div', 'og-slide', this.stage);
+    const theme = themeFor('origami', scene.plan.mood);
+    const nodes = renderSlide(scene.elements, theme, layer);
+    // Big panels and pictures first (they are usually backdrops), then reading order.
+    const items = scene.elements.map((el, i) => ({ el, node: nodes[i] }));
+    const big = (el: SlideElement) => el.type !== 'text' && el.w * el.h > CANVAS_W * CANVAS_H * 0.08;
+    const ordered = [...items.filter((it) => big(it.el)), ...readingOrder(items.filter((it) => !big(it.el)))];
+    ordered.forEach(({ el, node }, i) => {
+      const at = delay + i * 150;
+      if (el.type === 'text') {
+        node.style.transformOrigin = '50% 0%';
+        tl.animate(node, [
+          { transform: 'rotateX(-100deg)', opacity: 0, filter: 'brightness(.6)' },
+          { opacity: 1, offset: 0.2 },
+          { transform: 'rotateX(12deg)', filter: 'brightness(1.08)', offset: 0.75 },
+          { transform: 'rotateX(0deg)', opacity: 1, filter: 'brightness(1)' },
+        ], { duration: 820, delay: at, easing: EASE.paper });
+      } else {
+        this.unfoldHalves(layer, el, node, tl, at);
+      }
     });
-    // Paint order matters while the card is still flat: middle, bottom flap, top flap.
-    card.append(panels[1], panels[2], panels[0]);
-    panels[0].style.transformOrigin = '50% 100%';
-    panels[2].style.transformOrigin = '50% 0%';
-
-    tl.animate(wrap, [
-      { opacity: 0, transform: 'translateY(60px) rotate(-7deg) scale(.82)' },
-      { opacity: 1, transform: 'none' },
-    ], { duration: 560, delay, easing: EASE.out });
-    tl.animate(panels[0], [
-      { transform: 'rotateX(-180deg) translateZ(-4px)' },
-      { transform: 'rotateX(0deg) translateZ(0px)' },
-    ], { duration: 760, delay: delay + 380, easing: EASE.paper });
-    tl.animate(panels[2], [
-      { transform: 'rotateX(180deg) translateZ(-2px)' },
-      { transform: 'rotateX(0deg) translateZ(0px)' },
-    ], { duration: 760, delay: delay + 880, easing: EASE.paper });
-
-    // Little paper arrows pop in next to each bullet once the letter is open.
-    const marks = Array.from(card.querySelectorAll<HTMLElement>('.c-mark'));
-    const perCopy = parts.bullets.length;
-    marks.forEach((m, i) => {
-      tl.animate(m, [{ transform: 'translateY(1px) scale(0) rotate(-90deg)' }, { transform: 'translateY(1px) scale(1) rotate(0)' }], {
-        duration: 420, delay: delay + 1500 + (i % Math.max(1, perCopy)) * 110, easing: EASE.back,
-      });
-    });
-    return wrap;
+    return layer;
   }
 
-  private foldCardAway(wrap: HTMLElement, tl: Timeline): void {
-    const panels = Array.from(wrap.querySelectorAll<HTMLElement>('.og-panel'));
-    const top = panels.find((p) => p.classList.contains('og-p0'));
-    const bottom = panels.find((p) => p.classList.contains('og-p2'));
-    if (bottom) tl.animate(bottom, [{ transform: 'rotateX(0deg) translateZ(0px)' }, { transform: 'rotateX(180deg) translateZ(-2px)' }], { duration: 380, easing: EASE.in, fill: 'forwards' });
-    if (top) tl.animate(top, [{ transform: 'rotateX(0deg) translateZ(0px)' }, { transform: 'rotateX(-180deg) translateZ(-4px)' }], { duration: 380, delay: 200, easing: EASE.in, fill: 'forwards' });
-    tl.animate(wrap, [{ opacity: 1, transform: 'none' }, { opacity: 0, transform: 'translateY(-40px) rotate(5deg) scale(.8)' }], {
-      duration: 380, delay: 560, easing: EASE.in, fill: 'forwards',
-    }).finished.then(() => wrap.remove(), () => wrap.remove());
+  /** A sheet folded in half unfolds: the lower half swings down from behind the upper. */
+  private unfoldHalves(layer: HTMLElement, el: SlideElement, node: HTMLElement, tl: Timeline, at: number): void {
+    const wrap = h('div', 'og-fold', layer);
+    Object.assign(wrap.style, { left: `${el.x}px`, top: `${el.y}px`, width: `${el.w}px`, height: `${el.h}px` });
+    if (el.rotation) wrap.style.rotate = `${el.rotation}deg`;
+    layer.insertBefore(wrap, node);
+    const top = node.cloneNode(true) as HTMLElement;
+    const bottom = node.cloneNode(true) as HTMLElement;
+    top.style.clipPath = 'inset(0 0 50% 0)';
+    bottom.style.clipPath = 'inset(50% 0 0 0)';
+    bottom.style.transformOrigin = '50% 50%';
+    wrap.append(top, bottom);
+    node.style.visibility = 'hidden';
+    tl.animate(wrap, [{ opacity: 0, transform: 'scale(.9)' }, { opacity: 1, transform: 'none', offset: 0.25 }, { opacity: 1, transform: 'none' }], { duration: 900, delay: at, easing: EASE.out });
+    tl.animate(top, [{ filter: 'brightness(.85)' }, { filter: 'brightness(1)' }], { duration: 900, delay: at });
+    const open = tl.animate(bottom, [
+      { transform: 'rotateX(178deg)', filter: 'brightness(.6)' },
+      { transform: 'rotateX(80deg)', filter: 'brightness(.75)', offset: 0.5 },
+      { transform: 'rotateX(0deg)', filter: 'brightness(1)' },
+    ], { duration: 900, delay: at, easing: EASE.paper });
+    const settle = () => {
+      node.style.visibility = '';
+      wrap.remove();
+    };
+    open.finished.then(settle, settle);
+  }
+
+  private foldSlideAway(layer: HTMLElement, tl: Timeline): void {
+    const nodes = Array.from(layer.children) as HTMLElement[];
+    let last: Animation | null = null;
+    nodes.forEach((node, i) => {
+      node.style.transformOrigin = '50% 0%';
+      last = tl.animate(node, [{ transform: 'rotateX(0deg)', opacity: 1 }, { transform: 'rotateX(-95deg)', opacity: 0 }], {
+        duration: 420, delay: (nodes.length - 1 - i) * 40, easing: EASE.in, fill: 'forwards',
+      });
+    });
+    const done = () => layer.remove();
+    if (last) (last as Animation).finished.then(done, done);
+    else done();
   }
 }
 
 // ---- helpers ------------------------------------------------------------------------------
 
 function place(el: HTMLElement, p: PlacedMotif): void {
-  el.style.left = `${FIG_REGION.x + p.x}px`;
-  el.style.top = `${FIG_REGION.y + p.y}px`;
+  el.style.left = `${p.x}px`;
+  el.style.top = `${p.y}px`;
   el.style.width = `${p.size}px`;
   el.style.height = `${p.size}px`;
 }
 
 function placeShadow(el: HTMLElement, p: PlacedMotif): void {
-  el.style.left = `${FIG_REGION.x + p.x + p.size * 0.1}px`;
-  el.style.top = `${FIG_REGION.y + p.y + p.size * 0.94}px`;
+  el.style.left = `${p.x + p.size * 0.1}px`;
+  el.style.top = `${p.y + p.size * 0.94}px`;
   el.style.width = `${p.size * 0.8}px`;
 }
 

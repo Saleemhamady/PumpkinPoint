@@ -5,12 +5,12 @@ export type StyleId = 'origami' | 'book' | 'whiteboard' | 'kinetic';
 
 export const STYLE_IDS: StyleId[] = ['origami', 'book', 'whiteboard', 'kinetic'];
 
-/** How a slide's content is arranged (Layer 1). */
+/** Starting arrangements for a slide's text (templates; slides are free-form after that). */
 export type Layout = 'title' | 'bullets' | 'statement' | 'stat';
 
 export const LAYOUTS: Layout[] = ['title', 'bullets', 'statement', 'stat'];
 
-/** Layer 1 content of one slide. */
+/** Structured text, as the AI writes it and as templates consume it. */
 export interface SlideContent {
   layout: Layout;
   title: string;
@@ -19,15 +19,88 @@ export interface SlideContent {
   bullets: string[];
 }
 
-/** A slide in the editor: its Layer 1 content plus its Layer 2 story. */
-export interface Slide extends SlideContent {
+// ---- Slide elements: what a slide is made of (Layer 1) --------------------------
+
+/** Slides are drawn on a 1600x900 canvas, the same size as the presentation stage. */
+export const CANVAS_W = 1600;
+export const CANVAS_H = 900;
+
+/** Typefaces available to text. 'auto' uses the animation style's own typeface. */
+export type FontKey = 'sans' | 'serif' | 'hand' | 'display';
+export const FONT_KEYS: FontKey[] = ['sans', 'serif', 'hand', 'display'];
+
+/** What a piece of text is for; used by the AI and by the animations (titles enter differently). */
+export type TextRole = 'title' | 'subtitle' | 'body' | 'stat';
+export const TEXT_ROLES: TextRole[] = ['title', 'subtitle', 'body', 'stat'];
+
+/**
+ * Colours are either a hex value or a theme token. Tokens follow the animation style
+ * and the scene's mood, so text stays readable when the background changes.
+ */
+export type ColorToken = 'ink' | 'accent' | 'muted' | 'paper' | 'none';
+export const COLOR_TOKENS: ColorToken[] = ['ink', 'accent', 'muted', 'paper', 'none'];
+
+export type ShapeKind = 'rect' | 'round' | 'ellipse' | 'triangle' | 'diamond' | 'star' | 'arrow' | 'line';
+export const SHAPE_KINDS: ShapeKind[] = ['rect', 'round', 'ellipse', 'triangle', 'diamond', 'star', 'arrow', 'line'];
+
+interface ElementBase {
   id: string;
+  /** Position and size on the 1600x900 canvas. */
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  /** Degrees, clockwise, around the centre. */
+  rotation: number;
+}
+
+export interface TextElement extends ElementBase {
+  type: 'text';
+  role: TextRole;
+  text: string;
+  font: FontKey | 'auto';
+  /** Font size in canvas pixels. */
+  size: number;
+  bold: boolean;
+  italic: boolean;
+  align: 'left' | 'center' | 'right';
+  valign: 'top' | 'middle' | 'bottom';
+  color: string;
+  /** Show each line as a bullet. */
+  list: boolean;
+}
+
+export interface ShapeElement extends ElementBase {
+  type: 'shape';
+  shape: ShapeKind;
+  fill: string;
+  stroke: string;
+  strokeWidth: number;
+}
+
+export interface ImageElement extends ElementBase {
+  type: 'image';
+  /** A data: URL, so projects and exports stay self-contained. */
+  src: string;
+  fit: 'cover' | 'contain';
+  radius: number;
+  /** Describes the picture to the AI (and to screen readers). */
+  alt: string;
+}
+
+export type SlideElement = TextElement | ShapeElement | ImageElement;
+
+/** A slide in the editor: its elements (Layer 1) plus its story (Layer 2). */
+export interface Slide {
+  id: string;
+  /** Back to front. */
+  elements: SlideElement[];
   /** The story told while this slide is on screen (Layer 2 script). */
   story: string;
 }
 
 export interface Deck {
-  version: 1;
+  version: 2;
   title: string;
   style: StyleId;
   slides: Slide[];
@@ -103,7 +176,7 @@ export interface Project {
 
 /** Data embedded in the exported HTML and read by the runtime player. */
 export interface RuntimeScene {
-  slide: SlideContent;
+  elements: SlideElement[];
   plan: ScenePlan;
 }
 
