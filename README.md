@@ -30,6 +30,16 @@ cp .env.example .env      # optional: add ANTHROPIC_API_KEY to turn on AI
 npm run dev               # open http://localhost:5173
 ```
 
+To update an existing copy, stop the running server (Ctrl+C), then:
+
+```bash
+git pull                  # get the latest code
+npm install               # pick up any new dependencies
+npm run dev               # start again, then reload the page (Ctrl+Shift+R)
+```
+
+The version you are running is shown next to the PumpkinPoint name in the top bar.
+
 Without an API key everything still works in **offline mode**: stories and scene plans
 come from a built-in keyword planner instead of Claude, and "Generate slides" is disabled.
 

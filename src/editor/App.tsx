@@ -268,6 +268,7 @@ function Workspace({ initial }: { initial: Project | null }) {
         <div className="brand">
           <span className="logo" aria-hidden="true">🎃</span>
           <span>PumpkinPoint</span>
+          <span className="version" title="App version">v{__APP_VERSION__}</span>
         </div>
         <input
           className="deck-title"

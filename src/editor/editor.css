@@ -25,6 +25,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .top { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 14px; padding: 14px 0; background: var(--bg); border-bottom: 1px solid var(--line); }
 .brand { display: flex; align-items: center; gap: 8px; font-weight: 800; font-size: 18px; white-space: nowrap; }
 .logo { font-size: 22px; }
+.version { font-size: 12px; font-weight: 700; color: var(--muted); }
 .deck-title { flex: 1; min-width: 120px; border: 1px solid transparent; background: transparent; border-radius: 8px; padding: 6px 10px; font-size: 18px; font-weight: 600; }
 .deck-title:hover { border-color: var(--line); }
 .deck-title:focus { outline: none; border-color: var(--accent); background: #fff; }
