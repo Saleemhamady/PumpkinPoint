@@ -34,9 +34,13 @@ To update an existing copy, stop the running server (Ctrl+C), then:
 
 ```bash
 git pull                  # get the latest code
-npm install               # pick up any new dependencies
+npm ci                    # install exactly the locked dependencies
 npm run dev               # start again, then reload the page (Ctrl+Shift+R)
 ```
+
+`npm ci` never edits `package.json` or `package-lock.json`. If `git pull` says your
+local changes to those two files would be overwritten (a plain `npm install` can
+rewrite them), discard them first with `git checkout -- package.json package-lock.json`.
 
 The version you are running is shown next to the PumpkinPoint name in the top bar.
 
